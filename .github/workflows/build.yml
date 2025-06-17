@@ -1,0 +1,311 @@
+name: Build
+on:
+  pull_request:
+  push:
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+jobs:
+  build:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4.1.7
+
+      - name: Install current Bash on macOS
+        if: runner.os == 'macOS'
+        run: |
+          command -v brew && brew install bash || true
+
+      - uses: DeterminateSystems/nix-installer-action@v15
+        continue-on-error: true # Self-hosted runners already have Nix installed
+
+      - name: Install Bunker
+        run: |
+          if ! command -v bunker &> /dev/null; then
+            ./.github/install-bunker-ci.sh
+          fi
+
+      - name: Configure bunker
+        continue-on-error: true
+        run: |
+          : "${BUNKER_SERVER:=https://staging.bunker.rs/}"
+          : "${BUNKER_CACHE:=bunker-ci}"
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          bunker login --set-default ci "$BUNKER" "$BUNKER_TOKEN"
+          bunker use "$BUNKER_CACHE"
+          if [ -n "$BUNKER_TOKEN" ]; then
+            echo BUNKER_CACHE=$BUNKER_CACHE >>$GITHUB_ENV
+          fi
+        env:
+          BUNKER_SERVER: ${{ secrets.BUNKER_SERVER }}
+          BUNKER_CACHE: ${{ secrets.BUNKER_CACHE }}
+          BUNKER_TOKEN: ${{ secrets.BUNKER_TOKEN }}
+
+      - name: Cache dev shell
+        run: |
+          .ci/cache-shell.sh
+          system=$(nix-instantiate --eval -E 'builtins.currentSystem')
+          echo system=$system >>$GITHUB_ENV
+
+      # TODO: Abstract all of this out, and use `bunker push --stdin` (requires #232)
+      - name: Build packages
+        run: |
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          nix build --no-link --print-out-paths -L \
+            .#bunker \
+            .#bunker-client \
+            .#bunker-server \
+          | if [ -n "$BUNKER_CACHE" ]; then
+            xargs bunker push "ci:$BUNKER_CACHE"
+          else
+            cat
+          fi
+
+  tests:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        nix:
+          - "2.20"
+          - "2.24"
+          - "default"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4.1.7
+
+      - name: Install current Bash on macOS
+        if: runner.os == 'macOS'
+        run: |
+          command -v brew && brew install bash || true
+
+      - uses: DeterminateSystems/nix-installer-action@v15
+        continue-on-error: true # Self-hosted runners already have Nix installed
+
+      - name: Install Bunker
+        run: |
+          if ! command -v bunker &> /dev/null; then
+            ./.github/install-bunker-ci.sh
+          fi
+
+      - name: Configure Bunker
+        continue-on-error: true
+        run: |
+          : "${BUNKER_SERVER:=https://staging.bunker.rs/}"
+          : "${BUNKER_CACHE:=bunker-ci}"
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          bunker login --set-default ci "$BUNKER_SERVER" "$BUNKER_TOKEN"
+          bunker use "$BUNKER_CACHE"
+          if [ -n "$BUNKER_TOKEN" ]; then
+            echo BUNKER_CACHE=$BUNKER_CACHE >>$GITHUB_ENV
+          fi
+        env:
+          BUNKER_SERVER: ${{ secrets.BUNKER_SERVER }}
+          BUNKER_CACHE: ${{ secrets.BUNKER_CACHE }}
+          BUNKER_TOKEN: ${{ secrets.BUNKER_TOKEN }}
+
+      - name: Cache dev shell
+        run: |
+          .ci/cache-shell.sh
+          system=$(nix-instantiate --eval -E 'builtins.currentSystem')
+          echo system=$system >>$GITHUB_ENV
+
+      - name: Run unit tests
+        run: |
+          .ci/run just ci-unit-tests ${{ matrix.nix }}
+
+      - name: Build WebAssembly crates
+        if: runner.os == 'Linux'
+        run: |
+          .ci/run just ci-build-wasm
+
+      # TODO: Just take a diff of the list of store paths, also abstract all of this out
+      - name: Push build artifacts
+        run: |
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          if [ -n "$BUNKER_CACHE" ]; then
+            nix build --no-link --print-out-paths -L \
+              .#internalMatrix."$system".\"${{ matrix.nix }}\".bunker-tests \
+              .#internalMatrix."$system".\"${{ matrix.nix }}\".cargoArtifacts \
+            | xargs bunker push "ci:$BUNKER_CACHE"
+          fi
+
+  nix-matrix:
+    runs-on: self-hosted
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4.1.7
+      - uses: DeterminateSystems/nix-installer-action@v15
+        continue-on-error: true # Self-hosted runners already have Nix installed
+
+      - name: Install Bunker
+        run: |
+          if ! command -v bunker &> /dev/null; then
+            ./.github/install-bunker-ci.sh
+          fi
+
+      - name: Configure Bunker
+        continue-on-error: true
+        run: |
+          : "${BUNKER_SERVER:=https://staging.bunker.rs/}"
+          : "${BUNKER_CACHE:=bunker-ci}"
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          bunker login --set-default ci "$BUNKER_SERVER" "$BUNKER_TOKEN"
+          bunker use "$BUNKER_CACHE"
+          if [ -n "$BUNKER_TOKEN" ]; then
+            echo BUNKER_CACHE=$BUNKER_CACHE >>$GITHUB_ENV
+          fi
+        env:
+          BUNKER_SERVER: ${{ secrets.BUNKER_SERVER }}
+          BUNKER_CACHE: ${{ secrets.BUNKER_CACHE }}
+          BUNKER_TOKEN: ${{ secrets.BUNKER_TOKEN }}
+      - id: set-matrix
+        name: Generate Nix Matrix
+        run: |
+          set -Eeu
+          matrix="$(nix eval --json '.#githubActions.matrix')"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  nix-matrix-job:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    needs:
+      - build
+      - nix-matrix
+    strategy:
+      matrix: ${{fromJSON(needs.nix-matrix.outputs.matrix)}}
+    steps:
+      - uses: actions/checkout@v4.1.7
+
+      - name: Install current Bash on macOS
+        if: runner.os == 'macOS'
+        run: |
+          command -v brew && brew install bash || true
+
+      - uses: DeterminateSystems/nix-installer-action@v15
+        continue-on-error: true
+
+      - name: Install Bunker
+        run: |
+          if ! command -v bunker &> /dev/null; then
+            ./.github/install-bunker-ci.sh
+          fi
+
+      - name: Configure Bunker
+        continue-on-error: true
+        run: |
+          : "${BUNKER_SERVER:=https://staging.bunker.rs/}"
+          : "${BUNKER_CACHE:=bunker-ci}"
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          bunker login --set-default ci "$BUNKER_SERVER" "$BUNKER_TOKEN"
+          bunker use "$BUNKER_CACHE"
+          if [ -n "$BUNKER_TOKEN" ]; then
+            echo BUNKER_CACHE=$BUNKER_CACHE >>$GITHUB_ENV
+          fi
+        env:
+          BUNKER_SERVER: ${{ secrets.BUNKER_SERVER }}
+          BUNKER_CACHE: ${{ secrets.BUNKER_CACHE }}
+          BUNKER_TOKEN: ${{ secrets.BUNKER_TOKEN }}
+
+      - name: Build ${{ matrix.attr }}
+        run: |
+          nix build --no-link --print-out-paths -L '.#${{ matrix.attr }}' \
+          | if [ -n "$BUNKER_CACHE" ]; then
+            xargs bunker push "ci:$BUNKER_CACHE"
+          else
+            cat
+          fi
+
+  image:
+    runs-on: self-hosted
+    if: github.event_name == 'push'
+    needs:
+      - build
+      - tests
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4.1.7
+
+      - name: Install current Bash on macOS
+        if: runner.os == 'macOS'
+        run: |
+          command -v brew && brew install bash || true
+
+      - uses: DeterminateSystems/nix-installer-action@v15
+        continue-on-error: true # Self-hosted runners already have Nix installed
+
+      - name: Install Bunker
+        run: |
+          if ! command -v bunker &> /dev/null; then
+            ./.github/install-bunker-ci.sh
+          fi
+
+      - name: Configure Bunker
+        continue-on-error: true
+        run: |
+          : "${BUNKER_SERVER:=https://staging.bunker.rs/}"
+          : "${BUNKER_CACHE:=bunker-ci}"
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          bunker login --set-default ci "$BUNKER_SERVER" "$BUNKER_TOKEN"
+          bunker use "$BUNKER_CACHE"
+          if [ -n "$BUNKER_TOKEN" ]; then
+            echo BUNKER_CACHE=$BUNKER_CACHE >>$GITHUB_ENV
+          fi
+        env:
+          BUNKER_SERVER: ${{ secrets.BUNKER_SERVER }}
+          BUNKER_CACHE: ${{ secrets.BUNKER_CACHE }}
+          BUNKER_TOKEN: ${{ secrets.BUNKER_TOKEN }}
+
+      - name: Cache dev shell
+        run: |
+          .ci/cache-shell.sh
+          system=$(nix-instantiate --eval -E 'builtins.currentSystem')
+          echo system=$system >>$GITHUB_ENV
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push container images
+        continue-on-error: true
+        run: |
+          declare -a tags
+          tags+=("${{ github.sha }}")
+
+          branch=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+          if [[ "${{ github.ref }}" == "refs/tags/"* ]]; then
+            tags+=("$(echo $branch | sed -e 's/^v//')")
+          else
+            tags+=("${branch}")
+          fi
+
+          if [ "$branch" == "${{ github.event.repository.default_branch }}" ]; then
+            tags+=("latest")
+          fi
+
+          >&2 echo "Image: ${IMAGE_NAME}"
+          >&2 echo "Tags: ${tags[@]}"
+
+          .ci/run just ci-build-and-push-images "${IMAGE_NAME}" "${tags[@]}"
+
+      - name: Push build artifacts
+        run: |
+          export PATH=$HOME/.nix-profile/bin:$PATH # FIXME
+          if [ -n "$BUNKER_CACHE" ]; then
+            nix build --no-link --print-out-paths -L \
+              .#bunker-server-image \
+              .#bunker-server-image-aarch64 \
+            | xargs bunker push "ci:$BUNKER_CACHE"
+          fi
