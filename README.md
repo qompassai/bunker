@@ -3,7 +3,7 @@
 <!-- Copyright (C) 2025 Qompass AI, All rights reserved -->
 <!-- ---------------------------- -->
 
-<h2> Qompass AI Bunker: A Secure Nix Cache Server </h2>
+<h2> Qompass AI Bunker: The Secure Nix Cache Server </h2>
 
 ![Repository Views](https://komarev.com/ghpvc/?username=qompassai-bunker)
 ![GitHub all releases](https://img.shields.io/github/downloads/qompassai/bunker/total?style=flat-square)
