@@ -46,7 +46,6 @@ ______________________________________________________________________
   Founder & CEO<br>
   Qompass AI, Spokane, WA</p>
 </div>
-</details>
 
 <h3>Publications</h3>
   <p>
@@ -99,7 +98,7 @@ ______________________________________________________________________
 </details>
 
 <div align="center">
-<h3>💰 Our Support & Funding</h3>
+<h3>💰 How do I Support?</h3>
 
 <table>
 <tr>
@@ -121,7 +120,7 @@ ______________________________________________________________________
 </table>
 
 <br>
-<h4>🤝 Support Our Mission</h4>
+<h4>🤝 How To Financially Support Our Mission</h4>
 
 [![GitHub Sponsors](https://img.shields.io/badge/GitHub-Sponsor-EA4AAA?style=for-the-badge&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/phaedrusflow)
 [![Patreon](https://img.shields.io/badge/Patreon-Support-F96854?style=for-the-badge&logo=patreon&logoColor=white)](https://patreon.com/qompassai)
