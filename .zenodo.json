@@ -10,7 +10,7 @@
   "description": "The Secure Nix Cache Server",
   "license": "Q-CDA-1.0",
   "upload_type": "software",
-  "version": "ee23b6d",
-  "publication_date": "2025-07-17",
+  "version": "2025-07-18",
+  "publication_date": "2025-07-18",
   "access_right": "open"
 }
