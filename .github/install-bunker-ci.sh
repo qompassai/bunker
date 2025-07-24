@@ -3,7 +3,7 @@ set -euo pipefail
 expr=$(mktemp)
 
 cleanup() {
-    rm -f "$expr"
+  rm -f "$expr"
 }
 
 cat >"$expr" <<'EOF'
