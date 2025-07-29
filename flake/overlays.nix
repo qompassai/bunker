@@ -1,3 +1,5 @@
+# /qompassai/bunker/flake/overlays.nix
+# Qompass AI Bunker Overlay Flake
 { makeCranePkgs, ... }:
 {
   flake.overlays = {

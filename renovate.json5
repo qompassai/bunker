@@ -1,3 +1,7 @@
+// /qompassai/bunker/renovate.json5
+// Qompass AI Bunker Renovate Config
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [

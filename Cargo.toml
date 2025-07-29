@@ -1,27 +1,37 @@
-[workspace]
-resolver = "3"
+# /qompassai/bunker/Cargo.toml
+# Qompass AI Bunker Cargo Config
 
-members = [
-	"bunker",
-	"client",
-    "proxy",
-	"server",
-	"token",
-]
+[package]
+name = "bunker"
+version = "0.1.0"
+edition = "2021"
 
 [package.metadata.docs.rs]
 all-features = true
 
+[workspace]
+resolver = "3"
+members = ["bunker", "client", "proxy", "server", "token"]
+
 [workspace.dependencies]
-oqs = { version = "0.10.1", default-features = false, features = ["vendored", "kems", "sigs"] }
-oqs-sys = { version = "0.10.1", default-features = false, features = ["vendored", "kems", "sigs"] }
-[profile.release]
-opt-level = 3
-lto = true
-debug = 1
+oqs = { version = "0.10.1", default-features = false, features = [
+  "kems",
+  "sigs",
+  "vendored",
+] }
+oqs-sys = { version = "0.10.1", default-features = false, features = [
+  "kems",
+  "sigs",
+  "vendored",
+] }
 
 [workspace.metadata]
 rustfmt = { edition = "2024" }
+
+[profile.release]
+opt-level = 3
+debug = 1
+lto = true
 
 [profile.dev]
 opt-level = 1
@@ -32,6 +42,6 @@ opt-level = 3
 debug = 1
 
 [profile.opt-test]
-inherits = "dev"
 opt-level = 3
 debug = 1
+

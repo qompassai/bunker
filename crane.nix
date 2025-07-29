@@ -1,8 +1,7 @@
 # /qompassai/bunker/crane.nix
 # Qompass AI Bunker Crane.Nix Setup
-# ------------------
 # Copyright (C) 2025 Qompass AI, All rights reserved
-
+####################################################
 { stdenv
 , lib
 , buildPackages
@@ -18,13 +17,10 @@
 , boost
 , darwin
 , libiconv
-
 , extraPackageArgs ? {}
 }:
-
 let
   version = "0.1.0";
-
   ignoredPaths = [
     ".ci"
     ".github"
@@ -34,7 +30,6 @@ let
     "nixos"
     "target"
   ];
-
   src = lib.cleanSourceWith {
     filter = name: type: !(type == "directory" && builtins.elem (baseNameOf name) ignoredPaths);
     src = lib.cleanSource ./.;
@@ -79,7 +74,7 @@ let
       fi
     '';
     meta = with lib; {
-      description = "Multi-tenant Nix binary cache system";
+      description = "Quality Nix cache system";
       homepage = "https://github.com/qompassai/bunker";
       license = licenses.asl20;
       maintainers = with maintainers; [ phaedrusflow ];
@@ -90,11 +85,9 @@ let
       inherit nix;
     };
   } // args // extraArgs);
-
   bunker = mkBunker {
     cargoExtraArgs = "-p bunker-client -p bunker-server";
   };
-
   bunker-client = mkBunker {
     cargoExtraArgs = " -p bunker-client";
   };

@@ -1,4 +1,6 @@
-
+# /qompassai/bunker/package.nix
+# Qompass AI Bunker Nix Package
+#
 { lib, stdenv, rustPlatform
 , pkg-config
 , installShellFiles
@@ -43,7 +45,7 @@ in rustPlatform.buildRustPackage rec {
     fi
   '';
   meta = with lib; {
-    description = "Multi-tenant Nix binary cache system";
+    description = "Quality Nix binary cache system";
     homepage = "https://github.com/qompassai/bunker";
     license = licenses.asl20;
     maintainers = with maintainers; [ phaedrusflow ];
