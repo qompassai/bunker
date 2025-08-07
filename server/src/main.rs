@@ -1,7 +1,10 @@
+// /qompassai/bunker/server/src/main.rs
+// Qompass AI Bunker Server Main
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
 use tokio::join;
@@ -9,12 +12,11 @@ use tokio::task::spawn;
 use tracing_error::ErrorLayer;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
-
 use bunker_server::config;
 
 /// Nix binary cache server.
 #[derive(Debug, Parser)]
-#[clap(version, author = "Zhaofeng Li <hello@zhaofeng.li>")]
+#[clap(version, author = "Qompass AI <map@qompass.ai>")]
 #[clap(propagate_version = true)]
 struct Opts {
     /// Path to the config file.
@@ -62,13 +64,10 @@ enum ServerMode {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opts = Opts::parse();
-
     init_logging(opts.tokio_console);
     dump_version();
-
     let config =
         config::load_config(opts.config.as_deref(), opts.mode == ServerMode::Monolithic).await?;
-
     match opts.mode {
         ServerMode::Monolithic => {
             bunker_server::run_migrations(config.clone()).await?;
@@ -77,7 +76,6 @@ async fn main() -> Result<()> {
                 bunker_server::run_api_server(opts.listen, config.clone()),
                 bunker_server::gc::run_garbage_collection(config.clone()),
             );
-
             api_server?;
         }
         ServerMode::ApiServer => {
@@ -93,19 +91,14 @@ async fn main() -> Result<()> {
             bunker_server::gc::run_garbage_collection_once(config).await?;
         }
         ServerMode::CheckConfig => {
-            // config is valid, let's just exit :)
         }
     }
-
     Ok(())
 }
-
 fn init_logging(tokio_console: bool) {
     let env_filter = EnvFilter::from_default_env();
     let fmt_layer = tracing_subscriber::fmt::layer().with_filter(env_filter);
-
     let error_layer = ErrorLayer::default();
-
     let console_layer = if tokio_console {
         let (layer, server) = console_subscriber::ConsoleLayer::new();
         spawn(server.serve());
@@ -113,7 +106,6 @@ fn init_logging(tokio_console: bool) {
     } else {
         None
     };
-
     tracing_subscriber::registry()
         .with(fmt_layer)
         .with(error_layer)
@@ -124,11 +116,9 @@ fn init_logging(tokio_console: bool) {
         eprintln!("Note: tokio-console is enabled");
     }
 }
-
 fn dump_version() {
     #[cfg(debug_assertions)]
     eprintln!("Bunker Server {} (debug)", env!("CARGO_PKG_VERSION"));
-
     #[cfg(not(debug_assertions))]
     eprintln!("Bunker Server {} (release)", env!("CARGO_PKG_VERSION"));
 }

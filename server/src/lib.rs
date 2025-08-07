@@ -1,3 +1,7 @@
+// /qompassai/bunker/server/src/lib.rs
+// Qompass AI Bunker Server Lib
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
 #![deny(
     asm_sub_register,
     deprecated,
@@ -253,14 +257,11 @@ pub async fn run_api_server(cli_listen: Option<SocketAddr>, config: Config) -> R
 
     Ok(())
 }
-
 /// Runs database migrations.
 pub async fn run_migrations(config: Config) -> Result<()> {
     eprintln!("Running migrations...");
-
     let state = StateInner::new(config).await;
     let db = state.database().await?;
     Migrator::up(db, None).await?;
-
     Ok(())
 }

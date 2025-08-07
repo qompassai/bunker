@@ -1,6 +1,9 @@
+// /qompassai/bunker/server/src/middleware.rs
+// Qompass AI Bunker Server Middleware
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
 use anyhow::anyhow;
 use axum::{
     extract::{Extension, Host, Request},
@@ -11,7 +14,6 @@ use axum::{
 use super::{AuthState, RequestState, RequestStateInner, State};
 use crate::error::{ErrorKind, ServerResult};
 use bunker::api::binary_cache::BUNKER_CACHE_VISIBILITY;
-
 /// Initializes per-request state.
 pub async fn init_request_state(
     Extension(state): Extension<State>,
@@ -26,7 +28,6 @@ pub async fn init_request_state(
         } else {
             false
         };
-
     let req_state = Arc::new(RequestStateInner {
         auth: AuthState::new(),
         api_endpoint: state.config.api_endpoint.to_owned(),
@@ -35,11 +36,9 @@ pub async fn init_request_state(
         client_claims_https,
         public_cache: AtomicBool::new(false),
     });
-
     req.extensions_mut().insert(req_state);
     next.run(req).await
 }
-
 /// Restricts valid Host headers.
 ///
 /// We also require that all request have a Host header in
@@ -58,7 +57,6 @@ pub async fn restrict_host(
 
     Ok(next.run(req).await)
 }
-
 /// Sets the `X-Bunker-Cache-Visibility` header in responses.
 pub(crate) async fn set_visibility_header(
     Extension(req_state): Extension<RequestState>,
@@ -72,6 +70,5 @@ pub(crate) async fn set_visibility_header(
             .headers_mut()
             .append(BUNKER_CACHE_VISIBILITY, HeaderValue::from_static("public"));
     }
-
     Ok(response)
 }

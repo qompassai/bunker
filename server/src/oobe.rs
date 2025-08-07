@@ -1,3 +1,8 @@
+// /qompassai/bunker/server/src/oobe.rs
+// Qompass AI Bunker Server Out of the Box Experience (OOBE)
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
+
 //! Guided out-of-box experience.
 //!
 //! This performs automatic setup for people running `bunkerd`
@@ -29,10 +34,7 @@ pub async fn run_oobe() -> Result<()> {
     if config_path.exists() {
         return Ok(());
     }
-
     let data_path = config::get_xdg_data_path()?;
-
-    // Generate a simple config
     let database_path = data_path.join("server.db");
     let database_url = format!("sqlite://{}", database_path.to_str().unwrap());
     OpenOptions::new()
@@ -40,25 +42,19 @@ pub async fn run_oobe() -> Result<()> {
         .write(true)
         .open(&database_path)
         .await?;
-
     let storage_path = data_path.join("storage");
     fs::create_dir_all(&storage_path).await?;
-
     let rs256_secret_base64 = {
         let mut rng = rand::thread_rng();
         let private_key = rsa::RsaPrivateKey::new(&mut rng, 4096)?;
         let pkcs1_pem = private_key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)?;
-
         BASE64_STANDARD.encode(pkcs1_pem.as_bytes())
     };
-
     let config_content = CONFIG_TEMPLATE
         .replace("%database_url%", &database_url)
         .replace("%storage_path%", storage_path.to_str().unwrap())
         .replace("%token_rs256_secret_base64%", &rs256_secret_base64);
-
     fs::write(&config_path, config_content.as_bytes()).await?;
-
     // Generate a JWT token
     let root_token = {
         let in_two_years = Utc::now().checked_add_months(Months::new(24)).unwrap();
@@ -72,11 +68,9 @@ pub async fn run_oobe() -> Result<()> {
         perm.configure_cache = true;
         perm.configure_cache_retention = true;
         perm.destroy_cache = true;
-
         let key = decode_token_rs256_secret_base64(&rs256_secret_base64).unwrap();
         token.encode(&SignatureType::RS256(key), &None, &None)?
     };
-
     eprintln!();
     eprintln!("-----------------");
     eprintln!("Welcome to Bunker!");
@@ -96,6 +90,5 @@ pub async fn run_oobe() -> Result<()> {
     eprintln!("Enjoy!");
     eprintln!("-----------------");
     eprintln!();
-
     Ok(())
 }

@@ -1,7 +1,11 @@
+# /qompassai/bunker/server/Cargo.toml
+# Qompass AI Bunker Server Cargo Config
+# Copyright (C) 2025 Qompass AI, All rights reserved
+####################################################
 [package]
 name = "bunker-server"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 publish = false
 
 [lib]

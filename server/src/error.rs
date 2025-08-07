@@ -1,8 +1,10 @@
+// /qompassai/bunker/server/src/error.rs
+// Qompass AI Bunker Server Garbage Collection
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
 //! Error handling.
-
 use std::error::Error as StdError;
 use std::fmt;
-
 use anyhow::Error as AnyError;
 use axum::Json;
 use axum::http::StatusCode;
@@ -27,80 +29,58 @@ pub struct ServerError {
     /// Context of where the error occurred.
     context: SpanTrace,
 }
-
 /// The kind of an error.
 #[derive(Debug, Display)]
 pub enum ErrorKind {
-    // Generic responses
     /// The URL you requested was not found.
     NotFound,
-
     /// Unauthorized.
     Unauthorized,
-
     /// The server encountered an internal error or misconfiguration.
     InternalServerError,
-
-    // Specialized responses
     /// The requested cache does not exist.
     NoSuchCache,
-
     /// The cache already exists.
     CacheAlreadyExists,
-
     /// The requested object does not exist.
     NoSuchObject,
-
     /// Invalid compression type "{name}".
     InvalidCompressionType { name: String },
-
     /// The requested NAR has missing chunks and needs to be repaired.
     IncompleteNar,
-
     /// Database error: {0:#}
     DatabaseError(AnyError),
-
     /// Storage error: {0:#}
     StorageError(AnyError),
-
     /// Manifest serialization error: {0}
     ManifestSerializationError(super::nix_manifest::Error),
-
     /// Access error: {0}
     AccessError(super::access::Error),
-
     /// General request error: {0:#}
     RequestError(AnyError),
-
     /// Error from the common components.
     BunkerError(BunkerError),
 }
-
 #[derive(Serialize)]
 pub struct ErrorResponse {
     code: u16,
     error: String,
     message: String,
 }
-
 impl ServerError {
     pub fn database_error(error: impl StdError + Send + Sync + 'static) -> Self {
         ErrorKind::DatabaseError(AnyError::new(error)).into()
     }
-
     pub fn storage_error(error: impl StdError + Send + Sync + 'static) -> Self {
         ErrorKind::StorageError(AnyError::new(error)).into()
     }
-
     pub fn request_error(error: impl StdError + Send + Sync + 'static) -> Self {
         ErrorKind::RequestError(AnyError::new(error)).into()
     }
-
     pub fn set_discovery_permission(&mut self, perm: bool) {
         self.discovery_permission = perm;
     }
 }
-
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", self.kind)?;
@@ -108,7 +88,6 @@ impl fmt::Display for ServerError {
         Ok(())
     }
 }
-
 impl From<ErrorKind> for ServerError {
     fn from(kind: ErrorKind) -> Self {
         Self {
@@ -118,21 +97,17 @@ impl From<ErrorKind> for ServerError {
         }
     }
 }
-
 impl From<BunkerError> for ServerError {
     fn from(error: BunkerError) -> Self {
         ErrorKind::BunkerError(error).into()
     }
 }
-
 impl From<super::access::Error> for ServerError {
     fn from(error: super::access::Error) -> Self {
         ErrorKind::AccessError(error).into()
     }
 }
-
 impl StdError for ServerError {}
-
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         // TODO: Better logging control
@@ -151,10 +126,8 @@ impl IntoResponse for ServerError {
         } else {
             self.kind.into_no_discovery_permissions()
         };
-
         // TODO: don't sanitize in dev mode
         let sanitized = kind.into_clients();
-
         let status_code = sanitized.http_status_code();
         let error_response = ErrorResponse {
             code: status_code.as_u16(),
@@ -165,14 +138,12 @@ impl IntoResponse for ServerError {
         (status_code, Json(error_response)).into_response()
     }
 }
-
 impl ErrorKind {
     fn name(&self) -> &'static str {
         match self {
             Self::NotFound => "NotFound",
             Self::Unauthorized => "Unauthorized",
             Self::InternalServerError => "InternalServerError",
-
             Self::NoSuchObject => "NoSuchObject",
             Self::NoSuchCache => "NoSuchCache",
             Self::CacheAlreadyExists => "CacheAlreadyExists",
@@ -198,7 +169,6 @@ impl ErrorKind {
             _ => self,
         }
     }
-
     /// Returns a version of this error for clients.
     fn into_clients(self) -> Self {
         match self {

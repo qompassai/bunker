@@ -1,3 +1,8 @@
+# /qompassai/bunker/server/src/config-template.toml
+# Qompass AI Bunker Server Template Toml
+# Copyright (C) 2025 Qompass AI, All rights reserved
+####################################################
+
 # Socket address to listen on
 listen = "[::]:8080"
 

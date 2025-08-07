@@ -1,11 +1,13 @@
+// /qompassai/bunker/server/src/config.rs
+// Qompass AI Bunker Server Config
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
 //! Server configuration.
-
 use std::collections::HashSet;
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
 use anyhow::Result;
 use async_compression::Level as CompressionLevel;
 use bunker_token::SignatureType;
@@ -13,7 +15,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use derivative::Derivative;
 use serde::{de, Deserialize};
 use xdg::BaseDirectories;
-
 use crate::access::{
     decode_token_hs256_secret_base64, decode_token_rs256_pubkey_base64,
     decode_token_rs256_secret_base64, HS256Key, RS256KeyPair, RS256PublicKey,

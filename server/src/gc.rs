@@ -1,8 +1,10 @@
+// /qompassai/bunker/server/src/gc.rs
+// Qompass AI Bunker Server Garbage Collection
+// Copyright (C) 2025 Qompass AI, All rights reserved
+/////////////////////////////////////////////////////
 //! Garbage collection.
-
 use std::sync::Arc;
 use std::time::Duration;
-
 use anyhow::{anyhow, Result};
 use chrono::{Duration as ChronoDuration, Utc};
 use futures::future::join_all;
@@ -13,7 +15,6 @@ use sea_orm::{ConnectionTrait, FromQueryResult};
 use tokio::sync::Semaphore;
 use tokio::time;
 use tracing::instrument;
-
 use super::{State, StateInner};
 use crate::config::Config;
 use crate::database::entity::cache::{self, Entity as Cache};
@@ -21,7 +22,6 @@ use crate::database::entity::chunk::{self, ChunkState, Entity as Chunk};
 use crate::database::entity::chunkref::{self, Entity as ChunkRef};
 use crate::database::entity::nar::{self, Entity as Nar, NarState};
 use crate::database::entity::object::{self, Entity as Object};
-
 #[derive(Debug, FromQueryResult)]
 struct CacheIdAndRetentionPeriod {
     id: i64,
@@ -107,7 +107,6 @@ async fn run_time_based_garbage_collection(state: &State) -> Result<()> {
             )
             .exec(db)
             .await?;
-
         tracing::info!(
             "Deleted {} objects from {} (ID {})",
             deletion.rows_affected,
@@ -121,11 +120,9 @@ async fn run_time_based_garbage_collection(state: &State) -> Result<()> {
 
     Ok(())
 }
-
 #[instrument(skip_all)]
 async fn run_reap_orphan_nars(state: &State) -> Result<()> {
     let db = state.database().await?;
-
     // find all orphan NARs...
     let orphan_nar_ids = Query::select()
         .from(Nar)
@@ -141,18 +138,14 @@ async fn run_reap_orphan_nars(state: &State) -> Result<()> {
         .and_where(nar::Column::HoldersCount.eq(0))
         .lock_with_tables_behavior(LockType::Update, [Nar], LockBehavior::SkipLocked)
         .to_owned();
-
     // ... and simply delete them
     let deletion = Nar::delete_many()
         .filter(nar::Column::Id.in_subquery(orphan_nar_ids))
         .exec(db)
         .await?;
-
     tracing::info!("Deleted {} orphan NARs", deletion.rows_affected,);
-
     Ok(())
 }
-
 #[instrument(skip_all)]
 async fn run_reap_orphan_chunks(state: &State) -> Result<()> {
     let db = state.database().await?;
