@@ -1,17 +1,11 @@
 # /qompassai/bunker/Cargo.toml
 # Qompass AI Bunker Cargo Config
 
-[package]
-name = "bunker"
-version = "0.1.0"
-edition = "2021"
 
-[package.metadata.docs.rs]
-all-features = true
 
 [workspace]
 resolver = "3"
-members = ["bunker", "client", "proxy", "server", "token"]
+members = ["bunker", "client", "server", "token"]
 
 [workspace.dependencies]
 oqs = { version = "0.10.1", default-features = false, features = [
@@ -38,10 +32,6 @@ opt-level = 1
 debug = 2
 
 [profile.bench]
-opt-level = 3
-debug = 1
-
-[profile.opt-test]
 opt-level = 3
 debug = 1
 

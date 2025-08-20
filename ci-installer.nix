@@ -1,4 +1,3 @@
-
 { self
 , writeText
 , writeScript

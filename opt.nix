@@ -1,6 +1,7 @@
 # /qompassai/bunker/opt.nix
 # Qompass AI Bunker Opts
 # Copyright (C) 2025 Qompass AI, All rights reserved
+####################################################
 { inputs, ... }: {
   perSystem = { config, self', inputs', pkgs, system, lib, ... }: {
     packages = {

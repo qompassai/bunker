@@ -1,3 +1,4 @@
+# /qompassai/bunker/default.nix
 let
   flake = import ./flake-compat.nix;
 in flake.defaultNix.default.overrideAttrs (_: {
