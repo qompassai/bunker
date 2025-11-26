@@ -1,9 +1,0 @@
-[package]
-name = "bunker-proxy"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-pingora = "0.1"
-tokio = { version = "1.0", features = ["full"] }
-

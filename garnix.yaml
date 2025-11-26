@@ -1,8 +1,0 @@
-# /qompassai/bunker/garnix.yaml
-builds:
-  include:
-    - 'checks.x86_64-linux.*'
-    - 'checks.aarch64-linux.*'
-    - 'checks.aarch64-darwin.*'
-    - 'checks.x86_64-darwin.*'
-    - 'checks.x86_64-windows.*'
