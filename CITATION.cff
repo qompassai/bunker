@@ -16,6 +16,7 @@ keywords:
   - Healthcare
   - Post-Quantum Cryptography
   - Quantum
-  - opensource
-  - software
+  - performance
+  - rust
+  - systems programming
 abstract: "The Secure Nix Cache Server"
