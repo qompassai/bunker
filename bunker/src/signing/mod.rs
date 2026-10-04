@@ -34,6 +34,8 @@ use crate::error::BunkerResult;
 #[cfg(test)]
 mod tests;
 
+pub mod hybrid;
+
 /// An ed25519 keypair for signing.
 #[derive(Debug)]
 pub struct NixKeypair {
@@ -90,6 +92,12 @@ pub enum Error {
     ///
     /// A valid name cannot be empty and must be contain colons (:).
     InvalidSigningKeyName(String),
+
+    /// Hybrid signature verification failed: {0}
+    ///
+    /// Indicates which half failed: "ed25519" or "mldsa65".
+    /// Both halves must verify for a hybrid signature to be accepted.
+    HybridVerifyFailed(&'static str),
 }
 
 impl NixKeypair {
@@ -224,7 +232,7 @@ impl NixPublicKey {
 /// Validates the name/label of a signing key.
 ///
 /// A valid name cannot be empty and must not contain colons (:).
-fn validate_name(name: &str) -> BunkerResult<()> {
+pub(crate) fn validate_name(name: &str) -> BunkerResult<()> {
     if name.is_empty() || name.find(':').is_some() {
         Err(Error::InvalidSigningKeyName(name.to_string()).into())
     } else {
@@ -233,7 +241,7 @@ fn validate_name(name: &str) -> BunkerResult<()> {
 }
 
 /// Decodes a colon-delimited string containing a key name and a base64 payload.
-fn decode_string<'s>(
+pub(crate) fn decode_string<'s>(
     s: &'s str,
     usage: &'static str,
     expected_payload_length: usize,
