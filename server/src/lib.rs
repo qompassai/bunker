@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 // /qompassai/bunker/server/src/lib.rs
 // Qompass AI Bunker Server Lib
 // Copyright (C) 2025 Qompass AI, All rights reserved

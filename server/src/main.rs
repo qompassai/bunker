@@ -2,6 +2,7 @@
 // Qompass AI Bunker Server Main
 // Copyright (C) 2025 Qompass AI, All rights reserved
 /////////////////////////////////////////////////////
+#![forbid(unsafe_code)]
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;

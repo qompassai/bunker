@@ -49,11 +49,14 @@ pub(crate) async fn get_missing_paths(
         .await
         .map_err(ServerError::database_error)?;
     let found_hashes: HashSet<String> = result.into_iter().map(|row| row.store_path_hash).collect();
-    #[allow(unsafe_code)]
-    let missing_paths = requested_hashes
-        .difference(&found_hashes)
-        .map(|h| unsafe { StorePathHash::new_unchecked(h.to_string()) })
-        .collect();
+    // Validate requested hashes: untrusted input from the HTTP request body.
+    // Invalid hashes are a client error, not an internal invariant.
+    let mut missing_paths = Vec::new();
+    for h in requested_hashes.difference(&found_hashes) {
+        let hash =
+            StorePathHash::new(h.to_string()).map_err(crate::error::ServerError::request_error)?;
+        missing_paths.push(hash);
+    }
 
     Ok(Json(GetMissingPathsResponse { missing_paths }))
 }

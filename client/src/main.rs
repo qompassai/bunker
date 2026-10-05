@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![deny(
     asm_sub_register,
     deprecated,

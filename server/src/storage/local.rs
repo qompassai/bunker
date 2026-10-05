@@ -119,8 +119,10 @@ impl LocalBackend {
     }
 
     fn get_path(&self, p: &str) -> PathBuf {
-        let level1 = &p[0..1];
-        let level2 = &p[0..2];
+        // Validate: p must be at least 2 chars for the sharding scheme.
+        // Short or empty names are a client error, not a panic.
+        let level1 = p.get(0..1).unwrap_or("");
+        let level2 = p.get(0..2).unwrap_or(level1);
         self.config.path.join(level1).join(level2).join(p)
     }
 }
@@ -133,15 +135,16 @@ impl StorageBackend for LocalBackend {
         mut stream: &mut (dyn AsyncRead + Unpin + Send),
     ) -> ServerResult<RemoteFile> {
         let path = self.get_path(&name);
-        fs::create_dir_all(path.parent().unwrap())
-            .await
-            .map_err(|e| {
-                ErrorKind::StorageError(anyhow::anyhow!(
-                    "Failed to create directory {}: {}",
-                    path.parent().unwrap().display(),
-                    e
-                ))
-            })?;
+        let parent = path.parent().ok_or_else(|| {
+            ErrorKind::StorageError(anyhow::anyhow!("Storage path has no parent: {}", path.display()))
+        })?;
+        fs::create_dir_all(parent).await.map_err(|e| {
+            ErrorKind::StorageError(anyhow::anyhow!(
+                "Failed to create directory {}: {}",
+                parent.display(),
+                e
+            ))
+        })?;
         let mut file = File::create(self.get_path(&name)).await.map_err(|e| {
             ErrorKind::StorageError(anyhow::anyhow!(
                 "Failed to create file {}: {}",
@@ -213,5 +216,43 @@ impl StorageBackend for LocalBackend {
 
     async fn make_db_reference(&self, name: String) -> ServerResult<RemoteFile> {
         Ok(RemoteFile::Local(LocalRemoteFile { name }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_backend() -> LocalBackend {
+        LocalBackend {
+            config: LocalStorageConfig {
+                path: PathBuf::from("/tmp/test-storage"),
+            },
+        }
+    }
+
+    #[test]
+    fn get_path_handles_empty_name() {
+        // Adversarial: empty name must not panic on indexing
+        let backend = test_backend();
+        let path = backend.get_path("");
+        // Should produce a valid path, not panic
+        assert!(path.to_str().is_some());
+    }
+
+    #[test]
+    fn get_path_handles_single_char_name() {
+        // Adversarial: single char name must not panic on [0..2] indexing
+        let backend = test_backend();
+        let path = backend.get_path("a");
+        assert!(path.to_str().is_some());
+    }
+
+    #[test]
+    fn get_path_shards_normal_names() {
+        // Validation: normal names are sharded correctly
+        let backend = test_backend();
+        let path = backend.get_path("abcdef123456");
+        assert_eq!(path, PathBuf::from("/tmp/test-storage/a/ab/abcdef123456"));
     }
 }

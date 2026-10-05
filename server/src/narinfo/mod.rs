@@ -180,9 +180,10 @@ impl NarInfo {
     }
 
     /// Returns the store directory of this object.
-    pub fn store_dir(&self) -> &Path {
-        // FIXME: Validate store_path
-        self.store_path.parent().unwrap()
+    ///
+    /// Returns `None` if the store path has no parent (malformed input).
+    pub fn store_dir(&self) -> Option<&Path> {
+        self.store_path.parent()
     }
 
     /// Signs the narinfo and adds the signature to the narinfo.
@@ -192,8 +193,12 @@ impl NarInfo {
     }
 
     /// Returns the fingerprint of the object.
+    ///
+    /// Returns an empty vector if the store path is malformed.
     pub fn fingerprint(&self) -> Vec<u8> {
-        let store_dir = self.store_dir();
+        let Some(store_dir) = self.store_dir() else {
+            return Vec::new();
+        };
         let mut fingerprint = b"1;".to_vec();
 
         // 1;{storePath};{narHash};{narSize};{commaDelimitedReferences}

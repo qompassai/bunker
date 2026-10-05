@@ -18,6 +18,12 @@ impl FfiNixStore {
     /// mutates through this pointer, and `FfiNixStore` is `Send + Sync`.
     #[allow(clippy::mut_from_ref)]
     pub fn store(&self) -> Pin<&mut ffi::CNixStore> {
+        // SAFETY: `self.0` is an `UnsafeCell` initialized with a valid
+        // `cxx::UniquePtr` from `open_nix_store()`. The pointer is never
+        // null (cxx guarantees non-null for UniquePtr), so `as_mut()`
+        // always returns `Some`. The `Send + Sync` impls are sound because
+        // all C++ access is serialized through this method and the C++
+        // side is thread-safe for the operations used.
         unsafe {
             let ptr = self.0.get().as_mut().unwrap();
             ptr.pin_mut()
@@ -25,6 +31,10 @@ impl FfiNixStore {
     }
 }
 
+/// # Safety
+///
+/// The caller must ensure no other `FfiNixStore` is live for the same
+/// underlying Nix store, as the C++ side holds global state.
 pub unsafe fn open_nix_store() -> BunkerResult<FfiNixStore> {
     match ffi::open_nix_store() {
         Ok(ptr) => {

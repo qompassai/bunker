@@ -26,7 +26,7 @@ Sig: cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEa
             Path::new("/nix/store/xcp9cav49dmsjbwdjlmkjxj10gkpx553-hello-2.10"),
             narinfo.store_path
         );
-        assert_eq!(Path::new("/nix/store"), narinfo.store_dir());
+        assert_eq!(Some(Path::new("/nix/store")), narinfo.store_dir());
         assert_eq!(
             "nar/0nqgf15qfiacfxrgm2wkw0gwwncjqqzzalj8rs14w9srkydkjsk9.nar.xz",
             narinfo.url
@@ -125,4 +125,52 @@ Sig: cache.nixos.org-1:lo9EfNIL4eGRuNh7DTbAAffWPpI2SlYC/8uP7JnhgmfRIUNGhSbFe8qEa
     public_key
         .verify(&narinfo.fingerprint(), narinfo.signature().unwrap())
         .expect("Could not verify signature");
+}
+
+#[test]
+fn store_dir_returns_none_for_empty_path() {
+    // Adversarial: empty store path has no parent - must not panic
+    let s = r#"
+StorePath: 
+URL: nar/test.nar.xz
+Compression: xz
+FileHash: sha256:0nqgf15qfiacfxrgm2wkw0gwwncjqqzzalj8rs14w9srkydkjsk9
+FileSize: 41104
+NarHash: sha256:16mvl7v0ylzcg2n3xzjn41qhzbmgcn5iyarx16nn5l2r36n2kqci
+NarSize: 206104
+    "#;
+    let narinfo = NarInfo::from_str(s).expect("Could not parse narinfo");
+    assert_eq!(None, narinfo.store_dir());
+}
+
+#[test]
+fn store_dir_returns_none_for_root_path() {
+    // Adversarial: root path has no parent - must not panic
+    let s = r#"
+StorePath: /
+URL: nar/test.nar.xz
+Compression: xz
+FileHash: sha256:0nqgf15qfiacfxrgm2wkw0gwwncjqqzzalj8rs14w9srkydkjsk9
+FileSize: 41104
+NarHash: sha256:16mvl7v0ylzcg2n3xzjn41qhzbmgcn5iyarx16nn5l2r36n2kqci
+NarSize: 206104
+    "#;
+    let narinfo = NarInfo::from_str(s).expect("Could not parse narinfo");
+    assert_eq!(None, narinfo.store_dir());
+}
+
+#[test]
+fn fingerprint_returns_empty_for_malformed_path() {
+    // Validation: malformed path produces empty fingerprint, not panic
+    let s = r#"
+StorePath: 
+URL: nar/test.nar.xz
+Compression: xz
+FileHash: sha256:0nqgf15qfiacfxrgm2wkw0gwwncjqqzzalj8rs14w9srkydkjsk9
+FileSize: 41104
+NarHash: sha256:16mvl7v0ylzcg2n3xzjn41qhzbmgcn5iyarx16nn5l2r36n2kqci
+NarSize: 206104
+    "#;
+    let narinfo = NarInfo::from_str(s).expect("Could not parse narinfo");
+    assert!(narinfo.fingerprint().is_empty());
 }

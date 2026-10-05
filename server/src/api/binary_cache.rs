@@ -196,7 +196,11 @@ async fn get_nar(
 
     if chunks.len() == 1 {
         // single chunk
-        let chunk = chunks[0].as_ref().unwrap();
+        // SAFETY: `chunks.len() == 1` guarantees `first()` is `Some`, and the
+        // `any(Option::is_none)` check above guarantees the chunk is `Some`.
+        let chunk = chunks.first().and_then(Option::as_ref).ok_or_else(|| {
+            crate::error::ErrorKind::IncompleteNar
+        })?;
         let remote_file = &chunk.remote_file.0;
         let storage = state.storage().await?;
         match storage.download_file_db(remote_file, false).await? {

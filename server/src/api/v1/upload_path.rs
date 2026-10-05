@@ -222,9 +222,12 @@ async fn upload_path_dedup(
             .await
             .map_err(ServerError::request_error)?;
 
-        // FIXME: errors
-        let (nar_hash, nar_size) = nar_compute.get().unwrap();
-        let nar_hash = Hash::Sha256(nar_hash.as_slice().try_into().unwrap());
+        let (nar_hash, nar_size) = nar_compute.get().ok_or_else(|| {
+            ServerError::from(ErrorKind::RequestError(anyhow!("NAR stream was not finalized")))
+        })?;
+        let nar_hash = Hash::Sha256(nar_hash.as_slice().try_into().map_err(|_| {
+            ServerError::from(ErrorKind::RequestError(anyhow!("NAR hash has invalid length")))
+        })?);
 
         // Confirm that the NAR Hash and Size are correct
         if nar_hash.to_typed_base16() != existing_nar.nar_hash
@@ -381,7 +384,9 @@ async fn upload_path_new_chunked(
         //
         // We want to block the receive process as well, otherwise it stays ahead and
         // consumes too much memory
-        let permit = upload_chunk_limit.clone().acquire_owned().await.unwrap();
+        let permit = upload_chunk_limit.clone().acquire_owned().await.map_err(|_| {
+            ErrorKind::RequestError(anyhow!("Upload semaphore closed"))
+        })?;
         futures.push({
             let database = database.clone();
             let state = state.clone();
@@ -420,34 +425,38 @@ async fn upload_path_new_chunked(
     }
 
     // Confirm that the NAR Hash and Size are correct
-    // FIXME: errors
-    let (nar_hash, nar_size) = nar_compute.get().unwrap();
-    let nar_hash = Hash::Sha256(nar_hash.as_slice().try_into().unwrap());
+    let (nar_hash, nar_size) = nar_compute.get().ok_or_else(|| {
+        ServerError::from(ErrorKind::RequestError(anyhow!("NAR stream was not finalized")))
+    })?;
+    let nar_hash = Hash::Sha256(nar_hash.as_slice().try_into().map_err(|_| {
+        ServerError::from(ErrorKind::RequestError(anyhow!("NAR hash has invalid length")))
+    })?);
 
     if nar_hash != upload_info.nar_hash || *nar_size != upload_info.nar_size {
         return Err(ErrorKind::RequestError(anyhow!("Bad NAR Hash or Size")).into());
     }
 
     // Wait for all uploads to complete
-    let chunks: Vec<UploadChunkResult> = join_all(futures)
-        .await
-        .into_iter()
-        .map(|join_result| join_result.unwrap())
-        .collect::<ServerResult<Vec<_>>>()?;
+    let mut chunks: Vec<UploadChunkResult> = Vec::new();
+    for join_result in join_all(futures).await {
+        // JoinError -> ServerError, then flatten the inner ServerResult
+        let chunk_result: ServerResult<UploadChunkResult> = join_result.map_err(|e| {
+            ServerError::from(ErrorKind::RequestError(anyhow!("Upload task failed: {}", e)))
+        })?;
+        chunks.push(chunk_result?);
+    }
 
-    let (file_size, deduplicated_size) =
-        chunks
-            .iter()
-            .fold((0, 0), |(file_size, deduplicated_size), c| {
-                (
-                    file_size + c.guard.file_size.unwrap() as usize,
-                    if c.deduplicated {
-                        deduplicated_size + c.guard.chunk_size as usize
-                    } else {
-                        deduplicated_size
-                    },
-                )
-            });
+    let mut file_size: usize = 0;
+    let mut deduplicated_size: usize = 0;
+    for c in chunks.iter() {
+        let chunk_file_size = c.guard.file_size.ok_or_else(|| {
+            ServerError::from(ErrorKind::RequestError(anyhow!("Chunk missing file size")))
+        })? as usize;
+        file_size += chunk_file_size;
+        if c.deduplicated {
+            deduplicated_size += c.guard.chunk_size as usize;
+        }
+    }
 
     // Finally...
     let txn = database
@@ -524,7 +533,9 @@ async fn upload_path_new_unchunked(
         state.config.require_proof_of_possession,
     )
     .await?;
-    let file_size = chunk.guard.file_size.unwrap() as usize;
+    let file_size = chunk.guard.file_size.ok_or_else(|| {
+        ErrorKind::RequestError(anyhow!("Chunk missing file size"))
+    })? as usize;
 
     // Finally...
     let txn = database
@@ -621,8 +632,12 @@ async fn upload_chunk(
                 .map_err(ServerError::request_error)?;
 
             // FIXME: errors
-            let (nar_hash, nar_size) = nar_compute.get().unwrap();
-            let nar_hash = Hash::Sha256(nar_hash.as_slice().try_into().unwrap());
+            let (nar_hash, nar_size) = nar_compute.get().ok_or_else(|| {
+                ServerError::from(ErrorKind::RequestError(anyhow!("NAR stream was not finalized")))
+            })?;
+            let nar_hash = Hash::Sha256(nar_hash.as_slice().try_into().map_err(|_| {
+                ServerError::from(ErrorKind::RequestError(anyhow!("NAR hash has invalid length")))
+            })?);
 
             // Confirm that the NAR Hash and Size are correct
             if nar_hash.to_typed_base16() != existing_chunk.chunk_hash
@@ -703,11 +718,19 @@ async fn upload_chunk(
         .map_err(ServerError::storage_error)?;
 
     // Confirm that the chunk hash is correct
-    let (chunk_hash, chunk_size) = stream.nar_hash_and_size().unwrap();
-    let (file_hash, file_size) = stream.file_hash_and_size().unwrap();
+    let (chunk_hash, chunk_size) = stream.nar_hash_and_size().ok_or_else(|| {
+        ErrorKind::RequestError(anyhow!("Chunk stream was not finalized"))
+    })?;
+    let (file_hash, file_size) = stream.file_hash_and_size().ok_or_else(|| {
+        ErrorKind::RequestError(anyhow!("File stream was not finalized"))
+    })?;
 
-    let chunk_hash = Hash::Sha256(chunk_hash.as_slice().try_into().unwrap());
-    let file_hash = Hash::Sha256(file_hash.as_slice().try_into().unwrap());
+    let chunk_hash = Hash::Sha256(chunk_hash.as_slice().try_into().map_err(|_| {
+        ErrorKind::RequestError(anyhow!("Chunk hash has invalid length"))
+    })?);
+    let file_hash = Hash::Sha256(file_hash.as_slice().try_into().map_err(|_| {
+        ErrorKind::RequestError(anyhow!("File hash has invalid length"))
+    })?);
 
     if chunk_hash != given_chunk_hash || *chunk_size != given_chunk_size {
         return Err(ErrorKind::RequestError(anyhow!("Bad chunk hash or size")).into());
@@ -780,6 +803,7 @@ impl ChunkData {
                 let mut hasher = Sha256::new();
                 hasher.update(bytes);
                 let hash = hasher.finalize();
+                // Infallible: SHA256 output is always 32 bytes by construction.
                 Hash::Sha256(hash.as_slice().try_into().unwrap())
             }
             Self::Stream(_, hash, _) => hash.clone(),
