@@ -1,6 +1,8 @@
+use super::Token as BunkerToken;
 use super::*;
 
 use bunker::cache::CacheName;
+use jwt_simple::prelude::EdDSAKeyPairLike;
 
 macro_rules! cache {
     ($n:expr) => {
@@ -8,122 +10,212 @@ macro_rules! cache {
     };
 }
 
+/// Creates a test token with the given claims, signed with EdDSA.
+fn make_test_token(key: &Ed25519KeyPair, sub: &str, exp_offset_secs: i64) -> String {
+    let claims = TokenClaims {
+        bunker_ns: BunkerAccess::default(),
+    };
+    let now = Utc::now().timestamp();
+    let claims = JWTClaims {
+        issued_at: Some(UnixTimeStamp::from_secs(now as u64)),
+        expires_at: Some(UnixTimeStamp::from_secs((now + exp_offset_secs) as u64)),
+        invalid_before: None,
+        issuer: Some("test-issuer".to_string()),
+        subject: Some(sub.to_string()),
+        audiences: None,
+        jwt_id: None,
+        nonce: None,
+        custom: claims,
+    };
+    key.sign(claims).unwrap()
+}
+
+fn test_signature_type(key: &Ed25519KeyPair) -> SignatureType {
+    SignatureType::EdDSA(Box::new(
+        Ed25519KeyPair::from_bytes(&key.to_bytes()).unwrap(),
+    ))
+}
+
+fn test_issuer() -> Option<String> {
+    Some("test-issuer".to_string())
+}
+
+// --- Validation tests ---
+
 #[test]
-fn test_basic() {
-    /*
-    $ cat json
-      {
-        "sub": "meow",
-        "exp": 4102324986,
-        "nbf": 0,
-        "https://jwt.bunker.rs/v1": { // TO DO
-          "caches": {
-            "all-*": {"r":1},
-            "all-ci-*": {"w":1},
-            "cache-rw": {"r":1,"w":1},
-            "cache-ro": {"r":1},
-            "team-*": {"r":1,"w":1,"cc":1}
-          }
-        }
-      }
-    */
+fn valid_eddsa_token_verifies() {
+    let key = Ed25519KeyPair::generate();
+    let sig_type = test_signature_type(&key);
+    let token_str = make_test_token(&key, "alice", 3600);
 
-    let tokens: &[(&str, Box<dyn Fn() -> Token>)] = &[
-        (
-            "hs256",
-            Box::new(|| {
-                // printf '\xc3\x28 <- invalid utf8' | base64
-                let base64_secret = "wyggPC0gaW52YWxpZCB1dGY4";
-                let dec_key = decode_token_hs256_secret_base64(base64_secret).unwrap();
+    let token = BunkerToken::from_jwt(&token_str, &sig_type, &test_issuer(), &None).unwrap();
+    assert_eq!(token.sub(), Some("alice"));
+}
 
-                let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJtZW93IiwiZXhwIjo0MTAyMzI0OTg2LCJuYmYiOjAsImlhdCI6MTcyODIzMjk5NiwiaHR0cHM6Ly9qd3QuYnVua2VyLnJzL3YxIjp7ImNhY2hlcyI6eyJhbGwtKiI6eyJyIjoxfSwiYWxsLWNpLSoiOnsidyI6MX0sImNhY2hlLXJ3Ijp7InIiOjEsInciOjF9LCJjYWNoZS1ybyI6eyJyIjoxfSwidGVhbS0qIjp7InIiOjEsInciOjEsImNjIjoxfX19fQ.Zfy58eg1b_-d64s-NEN2QUJ_fZYTHA8oepfjlbKXJVk";
+#[test]
+fn expired_token_rejected() {
+    let key = Ed25519KeyPair::generate();
+    let sig_type = test_signature_type(&key);
+    // Expired 1 hour ago
+    let token_str = make_test_token(&key, "alice", -3600);
 
-                Token::from_jwt(token, &SignatureType::HS256(dec_key), &None, &None).unwrap()
-            }),
-        ),
-        (
-            "rs256",
-            Box::new(|| {
-                // nix shell nixpkgs#jwt-cli
-                // openssl genpkey -out rs256 -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform der
-                // BASE64_SECRET=$(openssl rsa -in rs256 -outform PEM -traditional | base64 -w0)
-                let base64_secret = "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBNUZranRMRzV5eS9pMFlnYkQxeUJBK21GckNmLzZiQ2F0TDFFQ3ppNG1tZWhSZTcwCkFEL0dSSHhTVUErc0pZeCtZNjlyL0RqQWs2OFJlQ1c4b2FQWXhtc21RNG5VM2ZwZ2E3WWFqZ3ZoWmVsa3JtaC8KZ1ZURWtFTG1IZlJtQkwvOWlsT20yRHNtYTVhUFo0SFl6ellpdjJvcFF5UGRndXcyWXFtbzE3Nk5MdllCMmpJTwovR3FkdE55K3NPV296NktVSVlJa0hWWU5HMENVcFNzdXBqUTJ6VTVZMFc2UXlNQWFWd1BONElJT3lXWUNwZXRECjFJbWxYekhROXM4NXFSWnlLa21iZFhtTVBVWmUvekRxc2FFd3lscFlpT0RjbDdRYU5QTzEzZnk3UGtQMmVwdUkKTk5tZ1E0WEF0MkF4ZXNKck5ibUs4aG1iM3doRXZkNjRFMGdEV1FJREFRQUJBb0lCQUJEemNRd2IyVi8wK1JCMgoyeE5qMll2eHpPTi93S2FYWHBTbUxDUHRIUDhSVEU2RnM0VkZOckdrelBOMmhsL3ZNdjZ4YWdHNk1NbUZ5SFV6CnovSHIyTTY1NjRnOTloaFlXc29FSmFwL3hVYXNjYlhrdWZwZTBZeW4rcThra21JdDRtTmZYRlpXNWI0ODJmNWsKRERVdG5weTVBOEVoSzNOcGw0dnhia0E5dS90TlVlT1NHTkhPYVZjcHdERVhDNXJ4bmFxTm5wMkMwa1A4ODRINgpSb2lZVkF4bytHaVpNVzhIOFRmSXVsenh3c04yQnVNcUNmOGVhNG1EM0pRVHZ2REhhUHM4eVJTUlB3UmlHYUkzCnVybFRmdjg4U20va09oL0N2SkpoRnhCVkVNVjIydWRNUmU3L3NpTWtlbVlvUnhaTWJjRGVQK2h1RktJWTRSMEoKNnRJUHQ3VUNnWUVBOTlhL2IzeFBsQWh0ck02dUlUUXNQd0FYQUg3Q1NXL1FSdVJUTWVhYXVIMk9sRitjZmpMNApJS1Nsdy9QaUtaUEk1TFRWM2ZVZk5WNTVsOFZHTytsT2ViTFhnaXBYM3BqSDBma3AyY3Q2Smk3aGw0aUlXK0h0ClpJNE9KYkYwTTBETHdySkd3T25QL2trRHNxSW9IbC9MdTBRM2FxSm1RVCsvcG54R083R21kbDhDZ1lFQTY5NFcKZHF2NnF4VjF5V0Z4QWZOOE1hZStpTC9xY1VhTm85ZzMva2YvOXZ3VXdtcERvR0xnaVVLMWZKb3BUYlBjcWgwRwptbUZEQ3V2M1Q0OS9yU2k5dU4zYm82cmlXRUl4VFg1YUtFSjlpSEFMWDJGWDdGSDJRdUZGWEwzQ2c0ckdvL1pDCmdjUkxuS3dma3JUVnRxeEdaNjN4YmsvcFpHWjZtTW01VkNDck1VY0NnWUVBc3JUT1pQMG1CSC92VldQU2UyNjcKV05JZncrT2pCSUR6bGFxZHNxV3Rlc3BPUFA2VVFRdFBqM29wYlJvMlFmU21Md09XRXUzbEN2Nk1mcnRvNFZwaAprNjg1WmtwU0FkZjRmWmRFYmg4aWZOWGhKUHIyR0FyWXVtRVVJbW5LZUFxSTRtTGFVZEJHZ2Z6MEJhS1hldzlvClFDZjRMWlBjVjhBMzJUeFRDRWdZMTlFQ2dZQU04U2F5WkVWZzFkQ2N1Q2dIUDJEMUtJc2YzY2Z6WnplbVlkclEKclFxeWRxcDg4Rys5Z1M5bzJLdzBwaERXSHFSaEFTNjNrZGFuNXNLdkx1U0dqOUc1THhNNks4bzNwWW9uQW1QWQpDYTN4cXBRMUs1WXpkVnZaMTVxQ3VEYlFHUEZGVmVIWVZQa0JJOENud0J4cDVaSUhabGYxQVpXQTJNNnBTNGhMCndXOGpTUUtCZ1FDQmNJbjU4Y0lmZkhmMjM4SUJvZnR1UVVzREZGcnkzaUVpaWpTYmJ1WnB1Vm8zL2pWbUsyaEYKS2xUL2xoRDdWdGJ1V3phMG9WQmZDaWZqMnZ2S2pmZ0l6NnF3Um1UbC9DSjlWdUNHTUI1VG55cGl3OEtodXorSAo0L2twdDdNcW9WQ0dRSjd1WVQyQzY1K0JqNklnUnBQT09za3VKNW1RZ0FlbTQ3eDBrVnRSemc9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=";
+    let result = BunkerToken::from_jwt(&token_str, &sig_type, &test_issuer(), &None);
+    assert!(result.is_err(), "expired token must be rejected");
+}
 
-                let dec_key = decode_token_rs256_secret_base64(base64_secret).unwrap();
+#[test]
+fn wrong_issuer_rejected() {
+    let key = Ed25519KeyPair::generate();
+    let sig_type = test_signature_type(&key);
+    let token_str = make_test_token(&key, "alice", 3600);
 
-                // TOKEN=$(jq -c < json | jwt encode --alg RS256 --secret @./rs256 -)
-                let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJtZW93IiwiZXhwIjo0MTAyMzI0OTg2LCJuYmYiOjAsImlhdCI6MTcyMjAwNTA3OSwiaHR0cHM6Ly9qd3QuYnVua2VyLnJzL3YxIjp7ImNhY2hlcyI6eyJhbGwtKiI6eyJyIjoxfSwiYWxsLWNpLSoiOnsidyI6MX0sImNhY2hlLXJ3Ijp7InIiOjEsInciOjF9LCJjYWNoZS1ybyI6eyJyIjoxfSwidGVhbS0qIjp7InIiOjEsInciOjEsImNjIjoxfX19fQ.25Q3o2vbTdzMWEmN8lgdk7qN89B3EXi26iSRJT_ohwfXL09kJmeBfWFb3GIjKhkYw5VRWy649yW7nRhONPiPgg-ALxuj7W9YYQNwZfivhdDzpi16cF9dZo4vCX6JECJ-S9G_LcAMtb7I2GMqAXYwWXWKm5YoIR1hfETC6y30t9afy1G5erCAA5vITfV2kVcuJDA9WwYZHlxqS0cSeDBQ7QU4qLuM-RNQAH6UgzkgV-AqV69rDajdi3dkXg3hkIhSzIGRYlsqTyh3_EIHmOebjFE8hlH2iWLDqrUgDdN0FpDD4VSZpqV3SYvKWajCXYsP6BHBnxMQShMraIoXuvfR5Q";
+    let wrong_issuer = Some("evil-issuer".to_string());
+    let result = BunkerToken::from_jwt(&token_str, &sig_type, &wrong_issuer, &None);
+    assert!(result.is_err(), "wrong issuer must be rejected");
+}
 
-                Token::from_jwt(token, &SignatureType::RS256(Box::new(dec_key)), &None, &None).unwrap()
-            }),
-        ),
-    ];
+#[test]
+fn token_without_expiry_rejected() {
+    let key = Ed25519KeyPair::generate();
+    let claims = JWTClaims {
+        issued_at: None,
+        expires_at: None, // No expiry!
+        invalid_before: None,
+        issuer: Some("test-issuer".to_string()),
+        subject: Some("alice".to_string()),
+        audiences: None,
+        jwt_id: None,
+        nonce: None,
+        custom: TokenClaims {
+            bunker_ns: BunkerAccess::default(),
+        },
+    };
+    let token_str = key.sign(claims).unwrap();
+    let sig_type = test_signature_type(&key);
 
-    for (name, decode) in tokens {
-        eprintln!("Testing {name}");
+    let result = BunkerToken::from_jwt(&token_str, &sig_type, &test_issuer(), &None);
+    assert!(
+        matches!(result, Err(Error::MissingExpiry)),
+        "token without exp must be rejected"
+    );
+}
 
-        // NOTE(cole-h): check that we get a consistent iteration order when getting permissions for
-        // caches -- this depends on the order of the fields in the token, but should otherwise be
-        // consistent between iterations
-        let mut was_ever_wrong = false;
-        for _ in 0..=1_000 {
-            // NOTE(cole-h): we construct a new Token every iteration in order to get different "random
-            // state"
-            let decoded = decode();
-            let perm_all_ci = decoded.get_permission_for_cache(&cache! { "all-ci-abc" });
+// --- Adversarial tests ---
 
-            // NOTE(cole-h): if the iteration order of the token is inconsistent, the permissions may be
-            // retrieved from the `all-ci-*` pattern (which only allows writing/pushing), even though
-            // the `all-*` pattern (which only allows reading/pulling) is specified first
-            if perm_all_ci.require_pull().is_err() || perm_all_ci.require_push().is_ok() {
-                was_ever_wrong = true;
-            }
-        }
-        assert!(
-            !was_ever_wrong,
-            "Iteration order should be consistent to prevent random auth failures (and successes)"
-        );
+#[test]
+fn alg_none_rejected() {
+    // Craft a JWT with alg: none (no signature)
+    let header = BASE64_STANDARD.encode(r#"{"alg":"none","typ":"JWT"}"#);
+    let payload = BASE64_STANDARD.encode(r#"{"sub":"alice","exp":4102324986}"#);
+    let token_str = format!("{}.{}.", header, payload);
 
-        let decoded = decode();
+    let key = Ed25519KeyPair::generate();
+    let sig_type = test_signature_type(&key);
 
-        let perm_rw = decoded.get_permission_for_cache(&cache! { "cache-rw" });
+    let result = BunkerToken::from_jwt(&token_str, &sig_type, &None, &None);
+    assert!(
+        matches!(result, Err(Error::AlgorithmMismatch)),
+        "alg:none must be rejected"
+    );
+}
 
-        assert!(perm_rw.pull);
-        assert!(perm_rw.push);
-        assert!(!perm_rw.delete);
-        assert!(!perm_rw.create_cache);
+#[test]
+fn alg_hs256_rejected() {
+    // Craft a JWT with alg: HS256 (algorithm confusion attempt)
+    let header = BASE64_STANDARD.encode(r#"{"alg":"HS256","typ":"JWT"}"#);
+    let payload = BASE64_STANDARD.encode(r#"{"sub":"alice","exp":4102324986}"#);
+    let fake_sig = BASE64_STANDARD.encode("fakesignature");
+    let token_str = format!("{}.{}.{}", header, payload, fake_sig);
 
-        assert!(perm_rw.require_pull().is_ok());
-        assert!(perm_rw.require_push().is_ok());
-        assert!(perm_rw.require_delete().is_err());
-        assert!(perm_rw.require_create_cache().is_err());
+    let key = Ed25519KeyPair::generate();
+    let sig_type = test_signature_type(&key);
 
-        let perm_ro = decoded.get_permission_for_cache(&cache! { "cache-ro" });
+    let result = BunkerToken::from_jwt(&token_str, &sig_type, &None, &None);
+    assert!(
+        matches!(result, Err(Error::AlgorithmMismatch)),
+        "alg:HS256 must be rejected"
+    );
+}
 
-        assert!(perm_ro.pull);
-        assert!(!perm_ro.push);
-        assert!(!perm_ro.delete);
-        assert!(!perm_ro.create_cache);
+#[test]
+fn tampered_signature_rejected() {
+    let key = Ed25519KeyPair::generate();
+    let sig_type = test_signature_type(&key);
+    let token_str = make_test_token(&key, "alice", 3600);
 
-        assert!(perm_ro.require_pull().is_ok());
-        assert!(perm_ro.require_push().is_err());
-        assert!(perm_ro.require_delete().is_err());
-        assert!(perm_ro.require_create_cache().is_err());
+    // Tamper with the last character of the signature
+    let mut tampered = token_str.clone();
+    let last_char = tampered.pop().unwrap();
+    let new_char = if last_char == 'A' { 'B' } else { 'A' };
+    tampered.push(new_char);
 
-        let perm_team = decoded.get_permission_for_cache(&cache! { "team-xyz" });
+    let result = BunkerToken::from_jwt(&tampered, &sig_type, &test_issuer(), &None);
+    assert!(result.is_err(), "tampered signature must be rejected");
+}
 
-        assert!(perm_team.pull);
-        assert!(perm_team.push);
-        assert!(!perm_team.delete);
-        assert!(perm_team.create_cache);
+#[test]
+fn future_nbf_rejected() {
+    let key = Ed25519KeyPair::generate();
+    let now = Utc::now().timestamp();
+    let claims = JWTClaims {
+        issued_at: None,
+        expires_at: Some(UnixTimeStamp::from_secs((now + 3600) as u64)),
+        // Not valid for another hour
+        invalid_before: Some(UnixTimeStamp::from_secs((now + 3600) as u64)),
+        issuer: Some("test-issuer".to_string()),
+        subject: Some("alice".to_string()),
+        audiences: None,
+        jwt_id: None,
+        nonce: None,
+        custom: TokenClaims {
+            bunker_ns: BunkerAccess::default(),
+        },
+    };
+    let token_str = key.sign(claims).unwrap();
+    let sig_type = test_signature_type(&key);
 
-        assert!(perm_team.require_pull().is_ok());
-        assert!(perm_team.require_push().is_ok());
-        assert!(perm_team.require_delete().is_err());
-        assert!(perm_team.require_create_cache().is_ok());
+    let result = BunkerToken::from_jwt(&token_str, &sig_type, &test_issuer(), &None);
+    assert!(result.is_err(), "future nbf must be rejected");
+}
 
-        assert!(!decoded
-            .get_permission_for_cache(&cache! { "forbidden-cache" })
-            .can_discover());
-    }
+#[test]
+fn malformed_jwt_rejected() {
+    let key = Ed25519KeyPair::generate();
+    let sig_type = test_signature_type(&key);
+
+    // Not 3 parts
+    let result = BunkerToken::from_jwt("not.a.jwt.at.all.extra", &sig_type, &None, &None);
+    assert!(result.is_err());
+
+    // Invalid base64 in header
+    let result = BunkerToken::from_jwt("!!!.payload.sig", &sig_type, &None, &None);
+    assert!(result.is_err());
+
+    // Empty string
+    let result = BunkerToken::from_jwt("", &sig_type, &None, &None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn wrong_key_rejected() {
+    let key1 = Ed25519KeyPair::generate();
+    let key2 = Ed25519KeyPair::generate();
+    let sig_type2 = test_signature_type(&key2);
+
+    // Sign with key1, verify with key2
+    let token_str = make_test_token(&key1, "alice", 3600);
+    let result = BunkerToken::from_jwt(&token_str, &sig_type2, &test_issuer(), &None);
+    assert!(result.is_err(), "wrong key must be rejected");
+}
+
+// --- Permission tests (from original test_basic, adapted for EdDSA) ---
+
+#[test]
+fn test_permissions() {
+    // Create a token and verify basic permission defaults.
+    // Note: BunkerToken::new creates a token with default (empty) permissions.
+    let token = BunkerToken::new("meow".to_string(), &Utc::now());
+
+    let perm = token.get_permission_for_cache(&cache!("any-cache"));
+    assert!(!perm.can_discover());
 }

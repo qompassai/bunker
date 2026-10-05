@@ -1159,6 +1159,7 @@ dependencies = [
  "regex",
  "rsa 0.9.8",
  "serde",
+ "serde_json",
  "serde_with",
  "tracing",
 ]

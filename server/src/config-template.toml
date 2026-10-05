@@ -153,16 +153,17 @@ interval = "12 hours"
 #token-bound-audiences = ["some-audience1", "some-audience2"]
 
 [jwt.signing]
-# JWT RS256 secret key
+# JWT Ed25519 secret key
 #
-# Set this to the base64-encoded private half of an RSA PEM PKCS1 key.
-# You can also set it via the `BUNKER_SERVER_TOKEN_RS256_SECRET_BASE64`
+# Set this to the base64-encoded Ed25519 PEM private key.
+# You can also set it via the `BUNKER_SERVER_TOKEN_ED25519_SECRET_BASE64`
 # environment variable.
-token-rs256-secret-base64 = "%token_rs256_secret_base64%"
+token-ed25519-secret-base64 = "%token_ed25519_secret_base64%"
 
-# JWT HS256 secret key
+# JWT Ed25519 public key (verify-only)
 #
-# Set this to the base64-encoded HMAC secret key.
-# You can also set it via the `BUNKER_SERVER_TOKEN_HS256_SECRET_BASE64`
+# Set this to the base64-encoded Ed25519 PEM public key to verify JWTs
+# without the ability to sign new ones.
+# You can also set it via the `BUNKER_SERVER_TOKEN_ED25519_PUBKEY_BASE64`
 # environment variable.
-#token-hs256-secret-base64 = ""
+#token-ed25519-pubkey-base64 = ""

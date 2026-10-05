@@ -3,24 +3,24 @@
 // Copyright (C) 2025 Qompass AI, All rights reserved
 /////////////////////////////////////////////////////
 //! Server configuration.
+use crate::access::{
+    decode_token_ed25519_pubkey_base64, decode_token_ed25519_secret_base64, Ed25519KeyPair,
+    Ed25519PublicKey,
+};
+use crate::narinfo::Compression as NixCompression;
+use crate::storage::{LocalStorageConfig, S3StorageConfig};
+use anyhow::Result;
+use async_compression::Level as CompressionLevel;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use bunker_token::SignatureType;
+use derivative::Derivative;
+use serde::{de, Deserialize};
 use std::collections::HashSet;
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use anyhow::Result;
-use async_compression::Level as CompressionLevel;
-use bunker_token::SignatureType;
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
-use derivative::Derivative;
-use serde::{de, Deserialize};
 use xdg::BaseDirectories;
-use crate::access::{
-    decode_token_hs256_secret_base64, decode_token_rs256_pubkey_base64,
-    decode_token_rs256_secret_base64, HS256Key, RS256KeyPair, RS256PublicKey,
-};
-use crate::narinfo::Compression as NixCompression;
-use crate::storage::{LocalStorageConfig, S3StorageConfig};
 
 /// Application prefix in XDG base directories.
 ///
@@ -32,17 +32,13 @@ const XDG_PREFIX: &str = "bunker";
 /// This is useful for deploying to certain application platforms like Fly.io
 const ENV_CONFIG_BASE64: &str = "BUNKER_SERVER_CONFIG_BASE64";
 
-/// Environment variable storing the base64-encoded HMAC secret (used for signing and verifying
-/// received JWTs).
-const ENV_TOKEN_HS256_SECRET_BASE64: &str = "BUNKER_SERVER_TOKEN_HS256_SECRET_BASE64";
-
-/// Environment variable storing the base64-encoded RSA PEM PKCS1 private key (used for signing and
+/// Environment variable storing the base64-encoded Ed25519 PEM private key (used for signing and
 /// verifying received JWTs).
-const ENV_TOKEN_RS256_SECRET_BASE64: &str = "BUNKER_SERVER_TOKEN_RS256_SECRET_BASE64";
+const ENV_TOKEN_ED25519_SECRET_BASE64: &str = "BUNKER_SERVER_TOKEN_ED25519_SECRET_BASE64";
 
-/// Environment variable storing the base64-encoded RSA PEM PKCS1 public key (used for verifying
+/// Environment variable storing the base64-encoded Ed25519 PEM public key (used for verifying
 /// received JWTs only).
-const ENV_TOKEN_RS256_PUBKEY_BASE64: &str = "BUNKER_SERVER_TOKEN_RS256_PUBKEY_BASE64";
+const ENV_TOKEN_ED25519_PUBKEY_BASE64: &str = "BUNKER_SERVER_TOKEN_ED25519_PUBKEY_BASE64";
 
 /// Environment variable storing the database connection string.
 const ENV_DATABASE_URL: &str = "BUNKER_SERVER_DATABASE_URL";
@@ -166,37 +162,32 @@ pub struct JWTConfig {
 }
 
 /// JSON Web Token signing configuration.
+///
+/// Only EdDSA (Ed25519) is supported. HS256 and RS256 were removed to
+/// prevent algorithm-confusion attacks.
 #[derive(Clone, Deserialize)]
 pub enum JWTSigningConfig {
-    /// JSON Web Token RSA pubkey.
+    /// JSON Web Token Ed25519 pubkey.
     ///
-    /// Set this to the base64-encoded RSA PEM PKCS1 public key to use for verifying JWTs only.
-    #[serde(rename = "token-rs256-pubkey-base64")]
-    #[serde(deserialize_with = "deserialize_token_rs256_pubkey_base64")]
-    RS256VerifyOnly(RS256PublicKey),
+    /// Set this to the base64-encoded Ed25519 PEM public key to use for verifying JWTs only.
+    #[serde(rename = "token-ed25519-pubkey-base64")]
+    #[serde(deserialize_with = "deserialize_token_ed25519_pubkey_base64")]
+    EdDSAVerifyOnly(Ed25519PublicKey),
 
-    /// JSON Web Token RSA secret.
+    /// JSON Web Token Ed25519 secret.
     ///
-    /// Set this to the base64-encoded RSA PEM PKCS1 private key to use for signing and verifying
+    /// Set this to the base64-encoded Ed25519 PEM private key to use for signing and verifying
     /// JWTs.
-    #[serde(rename = "token-rs256-secret-base64")]
-    #[serde(deserialize_with = "deserialize_token_rs256_secret_base64")]
-    RS256SignAndVerify(Box<RS256KeyPair>),
-
-    /// JSON Web Token HMAC secret.
-    ///
-    /// Set this to the base64-encoded HMAC secret to use for signing and verifying JWTs.
-    #[serde(rename = "token-hs256-secret-base64")]
-    #[serde(deserialize_with = "deserialize_token_hs256_secret_base64")]
-    HS256SignAndVerify(HS256Key),
+    #[serde(rename = "token-ed25519-secret-base64")]
+    #[serde(deserialize_with = "deserialize_token_ed25519_secret_base64")]
+    EdDSASignAndVerify(Box<Ed25519KeyPair>),
 }
 
 impl From<JWTSigningConfig> for SignatureType {
     fn from(value: JWTSigningConfig) -> Self {
         match value {
-            JWTSigningConfig::RS256VerifyOnly(key) => Self::RS256PubkeyOnly(key),
-            JWTSigningConfig::RS256SignAndVerify(key) => Self::RS256(key),
-            JWTSigningConfig::HS256SignAndVerify(key) => Self::HS256(key),
+            JWTSigningConfig::EdDSAVerifyOnly(key) => Self::EdDSAPubkeyOnly(key),
+            JWTSigningConfig::EdDSASignAndVerify(key) => Self::EdDSA(key),
         }
     }
 }
@@ -324,11 +315,9 @@ pub struct GarbageCollectionConfig {
 }
 
 fn load_jwt_signing_config_from_env() -> JWTSigningConfig {
-    let config = if let Some(config) = load_token_rs256_pubkey_from_env() {
+    let config = if let Some(config) = load_token_ed25519_pubkey_from_env() {
         config
-    } else if let Some(config) = load_token_rs256_secret_from_env() {
-        config
-    } else if let Some(config) = load_token_hs256_secret_from_env() {
+    } else if let Some(config) = load_token_ed25519_secret_from_env() {
         config
     } else {
         panic!(
@@ -337,32 +326,28 @@ fn load_jwt_signing_config_from_env() -> JWTSigningConfig {
             configuration by setting one of the following options in the \
             [jwt.signing] block:\n\
             \n\
-            * token-rs256-pubkey-base64\n\
-            * token-rs256-secret-base64\n\
-            * token-hs256-secret-base64\n\
+            * token-ed25519-pubkey-base64\n\
+            * token-ed25519-secret-base64\n\
             \n\
             or by setting one of the following environment variables:\n\
             \n\
-            * {ENV_TOKEN_RS256_PUBKEY_BASE64}\n\
-            * {ENV_TOKEN_RS256_SECRET_BASE64}\n\
-            * {ENV_TOKEN_HS256_SECRET_BASE64}\n\
+            * {ENV_TOKEN_ED25519_PUBKEY_BASE64}\n\
+            * {ENV_TOKEN_ED25519_SECRET_BASE64}\n\
             \n\
             Options will be tried in that same order (configuration options \
             first, then environment options if none of the configuration options \
-            were set, starting with the respective RSA pubkey option, the RSA \
-            secret option, and finally the HMAC secret option). \
+            were set, starting with the Ed25519 pubkey option, then the Ed25519 \
+            secret option). \
             The first option that is found will be used.\n\
             \n\
-            If an RS256 pubkey (asymmetric RSA PEM PKCS1 public key) is \
+            If an Ed25519 pubkey is \
             provided, it will only be possible to verify received JWTs, and not \
             sign new JWTs.\n\
             \n\
-            If an RS256 secret (asymmetric RSA PEM PKCS1 private key) is \
+            If an Ed25519 secret is \
             provided, it will be used for both signing new JWTs and verifying \
             received JWTs.\n\
-            \n\
-            If an HS256 secret (symmetric HMAC secret) is provided, it will be \
-            used for both signing new JWTs and verifying received JWTs.\n\
+\n\
             "
         )
     };
@@ -385,31 +370,22 @@ fn read_non_empty_var(key: &str) -> Result<Option<String>> {
     }
 }
 
-fn load_token_hs256_secret_from_env() -> Option<JWTSigningConfig> {
-    let s = read_non_empty_var(ENV_TOKEN_HS256_SECRET_BASE64)
-        .expect("HS256 environment cannot be read")?;
+fn load_token_ed25519_secret_from_env() -> Option<JWTSigningConfig> {
+    let s = read_non_empty_var(ENV_TOKEN_ED25519_SECRET_BASE64)
+        .expect("Ed25519 environment cannot be read")?;
 
-    let secret = decode_token_hs256_secret_base64(&s).expect("HS256 secret cannot be decoded");
+    let secret = decode_token_ed25519_secret_base64(&s).expect("Ed25519 secret cannot be decoded");
 
-    Some(JWTSigningConfig::HS256SignAndVerify(secret))
+    Some(JWTSigningConfig::EdDSASignAndVerify(Box::new(secret)))
 }
 
-fn load_token_rs256_secret_from_env() -> Option<JWTSigningConfig> {
-    let s = read_non_empty_var(ENV_TOKEN_RS256_SECRET_BASE64)
-        .expect("RS256 environment cannot be read")?;
+fn load_token_ed25519_pubkey_from_env() -> Option<JWTSigningConfig> {
+    let s = read_non_empty_var(ENV_TOKEN_ED25519_PUBKEY_BASE64)
+        .expect("Ed25519 pubkey environment cannot be read")?;
 
-    let secret = decode_token_rs256_secret_base64(&s).expect("RS256 cannot be decoded");
+    let pubkey = decode_token_ed25519_pubkey_base64(&s).expect("Ed25519 pubkey cannot be decoded");
 
-    Some(JWTSigningConfig::RS256SignAndVerify(Box::new(secret)))
-}
-
-fn load_token_rs256_pubkey_from_env() -> Option<JWTSigningConfig> {
-    let s = read_non_empty_var(ENV_TOKEN_RS256_PUBKEY_BASE64)
-        .expect("RS256 pubkey environment cannot be read")?;
-
-    let pubkey = decode_token_rs256_pubkey_base64(&s).expect("RS256 pubkey cannot be decoded");
-
-    Some(JWTSigningConfig::RS256VerifyOnly(pubkey))
+    Some(JWTSigningConfig::EdDSAVerifyOnly(pubkey))
 }
 
 fn load_database_url_from_env() -> String {
@@ -499,42 +475,30 @@ where
     ))
 }
 
-fn deserialize_token_hs256_secret_base64<'de, D>(deserializer: D) -> Result<HS256Key, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    use de::Error;
-
-    let s = String::deserialize(deserializer)?;
-    let key = decode_token_hs256_secret_base64(&s).map_err(Error::custom)?;
-
-    Ok(key)
-}
-
-fn deserialize_token_rs256_secret_base64<'de, D>(
+fn deserialize_token_ed25519_secret_base64<'de, D>(
     deserializer: D,
-) -> Result<Box<RS256KeyPair>, D::Error>
+) -> Result<Box<Ed25519KeyPair>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     use de::Error;
 
     let s = String::deserialize(deserializer)?;
-    let key = decode_token_rs256_secret_base64(&s).map_err(Error::custom)?;
+    let key = decode_token_ed25519_secret_base64(&s).map_err(Error::custom)?;
 
     Ok(Box::new(key))
 }
 
-fn deserialize_token_rs256_pubkey_base64<'de, D>(
+fn deserialize_token_ed25519_pubkey_base64<'de, D>(
     deserializer: D,
-) -> Result<RS256PublicKey, D::Error>
+) -> Result<Ed25519PublicKey, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     use de::Error;
 
     let s = String::deserialize(deserializer)?;
-    let key = decode_token_rs256_pubkey_base64(&s).map_err(Error::custom)?;
+    let key = decode_token_ed25519_pubkey_base64(&s).map_err(Error::custom)?;
 
     Ok(key)
 }

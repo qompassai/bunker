@@ -48,18 +48,19 @@ mod tests;
 use std::collections::HashSet;
 use std::error::Error as StdError;
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chrono::{DateTime, Utc};
 use displaydoc::Display;
 use indexmap::IndexMap;
-use jwt_simple::prelude::{Duration, RSAKeyPairLike, RSAPublicKeyLike, VerificationOptions};
+pub use jwt_simple::prelude::EdDSAKeyPairLike;
+use jwt_simple::prelude::{Duration, EdDSAPublicKeyLike, VerificationOptions};
 pub use jwt_simple::{
-    algorithms::{HS256Key, MACLike, RS256KeyPair, RS256PublicKey},
+    algorithms::{Ed25519KeyPair, Ed25519PublicKey},
     claims::{Claims, JWTClaims},
     prelude::UnixTimeStamp,
 };
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, BoolFromInt};
+use serde_with::{BoolFromInt, serde_as};
 
 use bunker::cache::{CacheName, CacheNamePattern};
 
@@ -188,8 +189,11 @@ pub enum Error {
     /// Base64 decode error: {0}
     Base64Error(base64::DecodeError),
 
-    /// RSA Key error: {0}
-    RsaKeyError(rsa::pkcs1::Error),
+    /// Token is missing required expiry (exp) claim.
+    MissingExpiry,
+
+    /// JWT uses an unexpected algorithm; only EdDSA is accepted.
+    AlgorithmMismatch,
 
     /// Failure decoding the base64 layer of the base64 encoded PEM
     Utf8Error(std::str::Utf8Error),
@@ -199,20 +203,73 @@ pub enum Error {
 }
 
 /// The supported JWT signature types.
+///
+/// Only EdDSA (Ed25519) is supported. HS256, RS256, and other algorithms
+/// are explicitly rejected to prevent algorithm-confusion attacks.
 pub enum SignatureType {
-    HS256(HS256Key),
-    RS256(Box<RS256KeyPair>),
-    RS256PubkeyOnly(RS256PublicKey),
+    EdDSA(Box<Ed25519KeyPair>),
+    EdDSAPubkeyOnly(Ed25519PublicKey),
+}
+
+/// Maximum token validity period in seconds: 90 days.
+///
+/// Tokens with a validity period longer than this are rejected.
+/// This prevents unbounded tokens.
+const MAX_TOKEN_VALIDITY_SECS: u64 = 90 * 24 * 60 * 60;
+
+/// Maximum JWT token length in bytes: 8 KiB.
+///
+/// Tokens larger than this are rejected before parsing.
+const MAX_TOKEN_LENGTH: usize = 8192;
+
+/// Maximum JWT header length in bytes: 512 bytes.
+///
+/// Headers should be small; larger headers suggest malformed input.
+const MAX_HEADER_LENGTH: usize = 512;
+
+/// Expected `alg` header value. Only EdDSA (Ed25519) is accepted.
+const EXPECTED_ALG: &str = "EdDSA";
+
+/// Extracts the `alg` header value from a JWT without verifying the signature.
+///
+/// Used for explicit algorithm enforcement before verification.
+fn extract_alg_header(token: &str) -> Result<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(Error::AlgorithmMismatch);
+    }
+    let header_bytes = BASE64_STANDARD
+        .decode(parts[0])
+        .map_err(Error::Base64Error)?;
+    let header: serde_json::Value =
+        serde_json::from_slice(&header_bytes).map_err(|_| Error::AlgorithmMismatch)?;
+    header
+        .get("alg")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned())
+        .ok_or(Error::AlgorithmMismatch)
 }
 
 impl Token {
     /// Verifies and decodes a token.
+    ///
+    /// Only EdDSA (Ed25519) signatures are accepted. The `alg` header is
+    /// checked explicitly before verification to prevent algorithm-confusion
+    /// attacks. Tokens without an `exp` claim are rejected.
     pub fn from_jwt(
         token: &str,
         signature_type: &SignatureType,
         maybe_bound_issuer: &Option<String>,
         maybe_bound_audiences: &Option<HashSet<String>>,
     ) -> Result<Self> {
+        // Explicit algorithm check: reject anything that isn't EdDSA.
+        // This is defense-in-depth; jwt-simple also validates the algorithm
+        // against the key type, but we do not rely on library defaults.
+        let alg = extract_alg_header(token)?;
+        if alg != EXPECTED_ALG {
+            return Err(Error::AlgorithmMismatch);
+        }
+
         let opts = VerificationOptions {
             reject_before: None,
             accept_future: false,
@@ -226,29 +283,30 @@ impl Token {
                 .to_owned(),
             allowed_audiences: maybe_bound_audiences.to_owned(),
             time_tolerance: None,
-            max_validity: None,
-            max_token_length: None,
-            max_header_length: None,
+            max_validity: Some(Duration::from_secs(MAX_TOKEN_VALIDITY_SECS)),
+            max_token_length: Some(MAX_TOKEN_LENGTH),
+            max_header_length: Some(MAX_HEADER_LENGTH),
             artificial_time: None,
         };
 
-        match signature_type {
-            SignatureType::HS256(key) => key
-                .verify_token(token, Some(opts))
-                .map_err(Error::TokenError)
-                .map(Token),
-            SignatureType::RS256(key) => {
+        let verified = match signature_type {
+            SignatureType::EdDSA(key) => {
                 let public_key = key.public_key();
                 public_key
-                    .verify_token(token, Some(opts))
-                    .map_err(Error::TokenError)
-                    .map(Token)
+                    .verify_token::<TokenClaims>(token, Some(opts))
+                    .map_err(Error::TokenError)?
             }
-            SignatureType::RS256PubkeyOnly(key) => key
-                .verify_token(token, Some(opts))
-                .map_err(Error::TokenError)
-                .map(Token),
+            SignatureType::EdDSAPubkeyOnly(key) => key
+                .verify_token::<TokenClaims>(token, Some(opts))
+                .map_err(Error::TokenError)?,
+        };
+
+        // Require exp claim: tokens without expiry are rejected.
+        if verified.expires_at.is_none() {
+            return Err(Error::MissingExpiry);
         }
+
+        Ok(Token(verified))
     }
 
     /// Creates a new token with an expiration timestamp.
@@ -294,9 +352,8 @@ impl Token {
         }
 
         match signature_type {
-            SignatureType::HS256(key) => key.authenticate(token).map_err(Error::TokenError),
-            SignatureType::RS256(key) => key.sign(token).map_err(Error::TokenError),
-            SignatureType::RS256PubkeyOnly(_) => Err(Error::PubkeyOnlyCannotCreateToken),
+            SignatureType::EdDSA(key) => key.sign(token).map_err(Error::TokenError),
+            SignatureType::EdDSAPubkeyOnly(_) => Err(Error::PubkeyOnlyCannotCreateToken),
         }
     }
 
@@ -402,23 +459,18 @@ impl CachePermission {
 
 impl StdError for Error {}
 
-pub fn decode_token_hs256_secret_base64(s: &str) -> Result<HS256Key> {
-    let decoded = BASE64_STANDARD.decode(s).map_err(Error::Base64Error)?;
-    Ok(HS256Key::from_bytes(&decoded))
-}
-
-pub fn decode_token_rs256_secret_base64(s: &str) -> Result<RS256KeyPair> {
+pub fn decode_token_ed25519_secret_base64(s: &str) -> Result<Ed25519KeyPair> {
     let decoded = BASE64_STANDARD.decode(s).map_err(Error::Base64Error)?;
     let secret = std::str::from_utf8(&decoded).map_err(Error::Utf8Error)?;
-    let keypair = RS256KeyPair::from_pem(secret).map_err(Error::TokenError)?;
+    let keypair = Ed25519KeyPair::from_pem(secret).map_err(Error::TokenError)?;
 
     Ok(keypair)
 }
 
-pub fn decode_token_rs256_pubkey_base64(s: &str) -> Result<RS256PublicKey> {
+pub fn decode_token_ed25519_pubkey_base64(s: &str) -> Result<Ed25519PublicKey> {
     let decoded = BASE64_STANDARD.decode(s).map_err(Error::Base64Error)?;
     let pubkey = std::str::from_utf8(&decoded).map_err(Error::Utf8Error)?;
-    let pubkey = RS256PublicKey::from_pem(pubkey).map_err(Error::TokenError)?;
+    let pubkey = Ed25519PublicKey::from_pem(pubkey).map_err(Error::TokenError)?;
 
     Ok(pubkey)
 }

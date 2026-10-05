@@ -18,11 +18,11 @@
 
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use bunker_token::Ed25519KeyPair;
 use chrono::{Months, Utc};
-use rsa::pkcs1::EncodeRsaPrivateKey;
 use tokio::fs::{self, OpenOptions};
 
-use crate::access::{decode_token_rs256_secret_base64, SignatureType, Token};
+use crate::access::{decode_token_ed25519_secret_base64, SignatureType, Token};
 use crate::config;
 use bunker::cache::CacheNamePattern;
 
@@ -45,16 +45,15 @@ pub async fn run_oobe() -> Result<()> {
         .await?;
     let storage_path = data_path.join("storage");
     fs::create_dir_all(&storage_path).await?;
-    let rs256_secret_base64 = {
-        let mut rng = rand::thread_rng();
-        let private_key = rsa::RsaPrivateKey::new(&mut rng, 4096)?;
-        let pkcs1_pem = private_key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)?;
-        BASE64_STANDARD.encode(pkcs1_pem.as_bytes())
+    let ed25519_secret_base64 = {
+        let key_pair = Ed25519KeyPair::generate();
+        let pem = key_pair.to_pem();
+        BASE64_STANDARD.encode(pem.as_bytes())
     };
     let config_content = CONFIG_TEMPLATE
         .replace("%database_url%", &database_url)
         .replace("%storage_path%", storage_path.to_str().unwrap())
-        .replace("%token_rs256_secret_base64%", &rs256_secret_base64);
+        .replace("%token_ed25519_secret_base64%", &ed25519_secret_base64);
     fs::write(&config_path, config_content.as_bytes()).await?;
     // Generate a JWT token
     let root_token = {
@@ -69,8 +68,8 @@ pub async fn run_oobe() -> Result<()> {
         perm.configure_cache = true;
         perm.configure_cache_retention = true;
         perm.destroy_cache = true;
-        let key = decode_token_rs256_secret_base64(&rs256_secret_base64).unwrap();
-        token.encode(&SignatureType::RS256(Box::new(key)), &None, &None)?
+        let key = decode_token_ed25519_secret_base64(&ed25519_secret_base64).unwrap();
+        token.encode(&SignatureType::EdDSA(Box::new(key)), &None, &None)?
     };
     eprintln!();
     eprintln!("-----------------");

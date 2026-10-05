@@ -26,7 +26,7 @@ pub mod nix_store;
 pub mod signing;
 #[cfg(feature = "stream")]
 pub mod stream;
-#[cfg(target_family = "unix")]
+#[cfg(all(target_family = "unix", feature = "tokio"))]
 pub mod testing;
 #[cfg(feature = "tokio")]
 pub mod util;
