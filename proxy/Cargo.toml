@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-pingora = "0.1"
+pingora = { version = "0.9", features = ["proxy", "openssl"] }
 tokio = { version = "1.0", features = ["full"] }
+clap = { version = "4.3", features = ["derive", "env"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+openssl = "0.10"
+async-trait = "0.1"
+bytes = "1.0"
 
