@@ -181,7 +181,7 @@ pub enum JWTSigningConfig {
     /// JWTs.
     #[serde(rename = "token-rs256-secret-base64")]
     #[serde(deserialize_with = "deserialize_token_rs256_secret_base64")]
-    RS256SignAndVerify(RS256KeyPair),
+    RS256SignAndVerify(Box<RS256KeyPair>),
 
     /// JSON Web Token HMAC secret.
     ///
@@ -400,7 +400,7 @@ fn load_token_rs256_secret_from_env() -> Option<JWTSigningConfig> {
 
     let secret = decode_token_rs256_secret_base64(&s).expect("RS256 cannot be decoded");
 
-    Some(JWTSigningConfig::RS256SignAndVerify(secret))
+    Some(JWTSigningConfig::RS256SignAndVerify(Box::new(secret)))
 }
 
 fn load_token_rs256_pubkey_from_env() -> Option<JWTSigningConfig> {
@@ -413,10 +413,12 @@ fn load_token_rs256_pubkey_from_env() -> Option<JWTSigningConfig> {
 }
 
 fn load_database_url_from_env() -> String {
-    env::var(ENV_DATABASE_URL).expect(&format!(
-        "Database URL must be specified in either database.url \
+    env::var(ENV_DATABASE_URL).unwrap_or_else(|_| {
+        panic!(
+            "Database URL must be specified in either database.url \
         or the {ENV_DATABASE_URL} environment."
-    ))
+        )
+    })
 }
 
 impl Default for JWTConfig {
@@ -509,7 +511,9 @@ where
     Ok(key)
 }
 
-fn deserialize_token_rs256_secret_base64<'de, D>(deserializer: D) -> Result<RS256KeyPair, D::Error>
+fn deserialize_token_rs256_secret_base64<'de, D>(
+    deserializer: D,
+) -> Result<Box<RS256KeyPair>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -518,7 +522,7 @@ where
     let s = String::deserialize(deserializer)?;
     let key = decode_token_rs256_secret_base64(&s).map_err(Error::custom)?;
 
-    Ok(key)
+    Ok(Box::new(key))
 }
 
 fn deserialize_token_rs256_pubkey_base64<'de, D>(

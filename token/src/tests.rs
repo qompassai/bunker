@@ -36,7 +36,7 @@ fn test_basic() {
                 let base64_secret = "wyggPC0gaW52YWxpZCB1dGY4";
                 let dec_key = decode_token_hs256_secret_base64(base64_secret).unwrap();
 
-                let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjQxMDIzMjQ5ODYsImh0dHBzOi8vand0LmF0dGljLnJzL3YxIjp7ImNhY2hlcyI6eyJhbGwtKiI6eyJyIjoxfSwiYWxsLWNpLSoiOnsidyI6MX0sImNhY2hlLXJvIjp7InIiOjF9LCJjYWNoZS1ydyI6eyJyIjoxLCJ3IjoxfSwidGVhbS0qIjp7ImNjIjoxLCJyIjoxLCJ3IjoxfX19LCJpYXQiOjE3MjgyMzI5OTYsIm5iZiI6MCwic3ViIjoibWVvdyJ9.wESluTI5K5v2W1WISGwAjazKMMUZBD-zSUYN-_XFN9I";
+                let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJtZW93IiwiZXhwIjo0MTAyMzI0OTg2LCJuYmYiOjAsImlhdCI6MTcyODIzMjk5NiwiaHR0cHM6Ly9qd3QuYnVua2VyLnJzL3YxIjp7ImNhY2hlcyI6eyJhbGwtKiI6eyJyIjoxfSwiYWxsLWNpLSoiOnsidyI6MX0sImNhY2hlLXJ3Ijp7InIiOjEsInciOjF9LCJjYWNoZS1ybyI6eyJyIjoxfSwidGVhbS0qIjp7InIiOjEsInciOjEsImNjIjoxfX19fQ.Zfy58eg1b_-d64s-NEN2QUJ_fZYTHA8oepfjlbKXJVk";
 
                 Token::from_jwt(token, &SignatureType::HS256(dec_key), &None, &None).unwrap()
             }),
@@ -52,9 +52,9 @@ fn test_basic() {
                 let dec_key = decode_token_rs256_secret_base64(base64_secret).unwrap();
 
                 // TOKEN=$(jq -c < json | jwt encode --alg RS256 --secret @./rs256 -)
-                let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJleHAiOjQxMDIzMjQ5ODYsImh0dHBzOi8vand0LmF0dGljLnJzL3YxIjp7ImNhY2hlcyI6eyJhbGwtKiI6eyJyIjoxfSwiYWxsLWNpLSoiOnsidyI6MX0sImNhY2hlLXJvIjp7InIiOjF9LCJjYWNoZS1ydyI6eyJyIjoxLCJ3IjoxfSwidGVhbS0qIjp7ImNjIjoxLCJyIjoxLCJ3IjoxfX19LCJpYXQiOjE3MjIwMDUwNzksIm5iZiI6MCwic3ViIjoibWVvdyJ9.Zs24IUbQOpOjhEe0sfsoSSJhDrzf4v-_wX_ceKqHeb2MERY8XSIQ1RPTNVeOW4LfJHumJj_rxh8Wv2BRGZSMldrTt0Ab_N7FnkhA37_jnRvgvEjSG3V4fC8aA4KoOa-43NRpg4HmPxiXte5-6LneBOR94Wss868wC1b_2yX2zCc1wQoZA3LNo-CRLnL4Yp5wY4Bbgyguv_9mfqXVYZykZnxumyGwVFD-Rub3KQ9d53Rf9tKcvRk9qxO2q8F2PKjeaUBG2xZtGwkWTMvSmwR1dKtkPUyPggOzbLoUG-6fxfo7D3NyL5qWCSN_7CkI-xlsRSLY1gTq-FqXvcpHeZbc8w";
+                let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJtZW93IiwiZXhwIjo0MTAyMzI0OTg2LCJuYmYiOjAsImlhdCI6MTcyMjAwNTA3OSwiaHR0cHM6Ly9qd3QuYnVua2VyLnJzL3YxIjp7ImNhY2hlcyI6eyJhbGwtKiI6eyJyIjoxfSwiYWxsLWNpLSoiOnsidyI6MX0sImNhY2hlLXJ3Ijp7InIiOjEsInciOjF9LCJjYWNoZS1ybyI6eyJyIjoxfSwidGVhbS0qIjp7InIiOjEsInciOjEsImNjIjoxfX19fQ.25Q3o2vbTdzMWEmN8lgdk7qN89B3EXi26iSRJT_ohwfXL09kJmeBfWFb3GIjKhkYw5VRWy649yW7nRhONPiPgg-ALxuj7W9YYQNwZfivhdDzpi16cF9dZo4vCX6JECJ-S9G_LcAMtb7I2GMqAXYwWXWKm5YoIR1hfETC6y30t9afy1G5erCAA5vITfV2kVcuJDA9WwYZHlxqS0cSeDBQ7QU4qLuM-RNQAH6UgzkgV-AqV69rDajdi3dkXg3hkIhSzIGRYlsqTyh3_EIHmOebjFE8hlH2iWLDqrUgDdN0FpDD4VSZpqV3SYvKWajCXYsP6BHBnxMQShMraIoXuvfR5Q";
 
-                Token::from_jwt(token, &SignatureType::RS256(dec_key), &None, &None).unwrap()
+                Token::from_jwt(token, &SignatureType::RS256(Box::new(dec_key)), &None, &None).unwrap()
             }),
         ),
     ];

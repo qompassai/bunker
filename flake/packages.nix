@@ -78,9 +78,6 @@ in
             inherit self;
           };
 
-          book = pkgs.callPackage ../book {
-            bunker = self'.packages.bunker;
-          };
         };
       }
 

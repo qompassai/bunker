@@ -70,6 +70,11 @@ mod nix_store {
             .flag("nix/config.h")
             .flag("-idirafter")
             .flag(hacky_include.path().to_str().unwrap())
+            // Nix's pkg-config Cflags point directly at <includedir>/nix
+            // (not <includedir>), so `-include nix/config.h` below needs the
+            // parent include dir on the search path too.
+            .flag("-I")
+            .flag(env!("NIX_INCLUDE_PATH"))
             // In Nix 2.19+, nix/args/root.hh depends on being able to #include "args.hh" (which is in its parent directory), for some reason
             .flag("-I")
             .flag(concat!(env!("NIX_INCLUDE_PATH"), "/nix"));

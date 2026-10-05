@@ -98,8 +98,11 @@ where
     Box::pin(s)
 }
 
+/// Shared cell holding the finalized digest and byte count.
+type FinalizedDigest<D> = Arc<OnceCell<(DigestOutput<D>, usize)>>;
+
 impl<R: AsyncRead + Unpin, D: Digest + Unpin> StreamHasher<R, D> {
-    pub fn new(inner: R, digest: D) -> (Self, Arc<OnceCell<(DigestOutput<D>, usize)>>) {
+    pub fn new(inner: R, digest: D) -> (Self, FinalizedDigest<D>) {
         let finalized = Arc::new(OnceCell::new());
 
         (

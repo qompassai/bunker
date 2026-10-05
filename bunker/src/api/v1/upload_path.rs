@@ -29,14 +29,10 @@ pub struct UploadPathResult {
     pub file_size: Option<usize>,
     pub frac_deduplicated: Option<f64>,
 }
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum UploadPathResultKind {
+    #[default]
     Uploaded,
     Deduplicated,
-}
-impl Default for UploadPathResultKind {
-    fn default() -> Self {
-        Self::Uploaded
-    }
 }

@@ -16,12 +16,18 @@ pub struct AuthState {
     pub token: OnceCell<Token>,
 }
 
-impl AuthState {
-    /// Returns an auth state with no authenticated user and no permissions.
-    pub fn new() -> Self {
+impl Default for AuthState {
+    fn default() -> Self {
         Self {
             token: OnceCell::new(),
         }
+    }
+}
+
+impl AuthState {
+    /// Returns an auth state with no authenticated user and no permissions.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Returns the username if it exists.

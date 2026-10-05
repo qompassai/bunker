@@ -39,28 +39,40 @@ where
     Ok(serializer.into_output())
 }
 
+/// Error from Nix manifest (de)serialization.
 #[derive(Debug, Display)]
 pub enum Error {
+    /// Unexpected: {0}
     Unexpected(&'static str),
 
+    /// Unexpected end of input
     UnexpectedEof,
 
+    /// Expected ':'
     ExpectedColon,
 
+    /// Expected a boolean
     ExpectedBoolean,
 
+    /// Expected an integer
     ExpectedInteger,
 
+    /// Unsupported: {0}
     Unsupported(&'static str),
 
+    /// `Any` values are unsupported
     AnyUnsupported,
 
+    /// `None` values are unsupported
     NoneUnsupported,
 
+    /// Nested maps are unsupported
     NestedMapUnsupported,
 
+    /// Floats are unsupported
     FloatUnsupported,
 
+    /// {0}
     Custom(String),
 }
 

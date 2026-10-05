@@ -2,12 +2,13 @@
 #[allow(unsafe_code)]
 mod bindings;
 #[cfg(feature = "nix_store")]
-mod nix_store;
+mod store;
+use std::fmt;
 use crate::error::{BunkerError, BunkerResult};
 use crate::hash::Hash;
 use lazy_static::lazy_static;
 #[cfg(feature = "nix_store")]
-pub use nix_store::NixStore;
+pub use store::NixStore;
 use regex::Regex;
 use serde::{Deserialize, Serialize, de};
 use std::ffi::OsStr;
@@ -169,7 +170,7 @@ impl StorePath {
 impl StorePathHash {
     /// Creates a store path hash from a string.
     pub fn new(hash: String) -> BunkerResult<Self> {
-        if hash.as_bytes().len() != STORE_PATH_HASH_LEN {
+        if hash.len() != STORE_PATH_HASH_LEN {
             return Err(BunkerError::InvalidStorePathHash {
                 hash,
                 reason: "Hash is of invalid length",
@@ -200,8 +201,11 @@ impl StorePathHash {
         &self.0
     }
 
-    pub fn to_string(&self) -> String {
-        self.0.clone()
+}
+
+impl fmt::Display for StorePathHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 

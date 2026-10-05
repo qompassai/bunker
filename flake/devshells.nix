@@ -75,7 +75,6 @@ in
       devShells.default = pkgs.mkShell (lib.recursiveUpdate {
         inputsFrom = [
           self'.packages.bunker
-          self'.packages.book
         ];
         packages = lib.flatten (lib.attrValues cfg.packageSets);
         env = {

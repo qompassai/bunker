@@ -52,7 +52,7 @@ use crate::database::{BunkerDatabase, ChunkGuard, NarGuard};
 
 const CONCURRENT_CHUNK_UPLOADS: usize = 10;
 
-const MAX_NAR_INFO_SIZE: usize = 1 * 1024 * 1024; // 1 MiB
+const MAX_NAR_INFO_SIZE: usize = 1024 * 1024; // 1 MiB
 type CompressorFn<C> = Box<dyn FnOnce(C) -> Box<dyn AsyncRead + Unpin + Send> + Send>;
 enum ChunkData {
     Bytes(Bytes),
@@ -111,7 +111,7 @@ pub(crate) async fn upload_path(
 ) -> ServerResult<Json<UploadPathResult>> {
     let stream = body.into_data_stream();
     let mut stream = StreamReader::new(
-        stream.map(|r| r.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))),
+        stream.map(|r| r.map_err(|e| io::Error::other(e.to_string()))),
     );
 
     let upload_info: UploadPathNarInfo = {

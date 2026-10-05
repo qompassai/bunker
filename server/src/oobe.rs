@@ -39,6 +39,7 @@ pub async fn run_oobe() -> Result<()> {
     let database_url = format!("sqlite://{}", database_path.to_str().unwrap());
     OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(&database_path)
         .await?;
@@ -69,7 +70,7 @@ pub async fn run_oobe() -> Result<()> {
         perm.configure_cache_retention = true;
         perm.destroy_cache = true;
         let key = decode_token_rs256_secret_base64(&rs256_secret_base64).unwrap();
-        token.encode(&SignatureType::RS256(key), &None, &None)?
+        token.encode(&SignatureType::RS256(Box::new(key)), &None, &None)?
     };
     eprintln!();
     eprintln!("-----------------");

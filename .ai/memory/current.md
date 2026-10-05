@@ -1,15 +1,20 @@
 # Current Work
 
-Language/framework mirror repository (qompassai hygiene program).
+Post-quantum secure Nix binary cache server (fork of zhaofengli/attic).
 
 ## Status
 
-Mirror of upstream. Not actively developed; synced periodically.
-See qompassai/Python for the license normalization pilot pattern.
+Active development: PQ hardening program in progress (2026-10-04).
+See ~/workspace/bunker/plan-2026-10-04.md for the phased plan.
+
+Decisions (2026-10-04, Matt):
+- Hybrid signatures (Ed25519 + ML-DSA-65) for NAR signing
+- Proxy is a workspace member (moved from .forge/proxy/)
+- NixOS deployment target; also local/dev cache and remote ops
+- Finish PQ before considering upstream attic sync; stay forked
 
 ## Standing rules
 
-- License: Apache-2.0 (SPDX). `LICENSE` file byte-identical to canonical
-  text except filled copyright line.
-- Do not push code changes without Matt's explicit direction; mirrors
-  track upstream.
+- License: AGPL-3.0 + Q-CDA (see LICENSE-AGPL, LICENSE-QCDA).
+- Tiger Style Rust for all new/changed code.
+- Gates per phase: cargo build, clippy -D warnings, tests 50/50 validation/adversarial.

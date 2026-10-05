@@ -115,6 +115,7 @@ impl NixKeypair {
     }
 
     /// Imports an existing keypair from its canonical representation.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(keypair: &str) -> BunkerResult<Self> {
         let (name, bytes) = decode_string(keypair, "keypair", KeyPair::BYTES, None)?;
 
@@ -197,6 +198,7 @@ impl Serialize for NixKeypair {
 
 impl NixPublicKey {
     /// Imports an existing public key from its canonical representation.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(public_key: &str) -> BunkerResult<Self> {
         let (name, bytes) = decode_string(public_key, "public key", PublicKey::BYTES, None)?;
 
@@ -254,14 +256,14 @@ pub(crate) fn decode_string<'s>(
     validate_name(name)?;
 
     // don't bother decoding base64 if the name doesn't match
-    if let Some(expected_name) = expected_name {
-        if expected_name != name {
-            return Err(Error::WrongKeyName {
-                our_name: expected_name.to_string(),
-                string_name: name.to_string(),
-            }
-            .into());
+    if let Some(expected_name) = expected_name
+        && expected_name != name
+    {
+        return Err(Error::WrongKeyName {
+            our_name: expected_name.to_string(),
+            string_name: name.to_string(),
         }
+        .into());
     }
 
     let bytes = BASE64_STANDARD

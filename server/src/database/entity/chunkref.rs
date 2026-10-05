@@ -1,3 +1,5 @@
+use sea_orm::entity::prelude::*;
+
 pub type ChunkRefModel = Model;
 
 #[derive(Debug, Clone, PartialEq, Eq, DeriveEntityModel)]

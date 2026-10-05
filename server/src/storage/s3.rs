@@ -92,7 +92,7 @@ impl S3Backend {
     }
 
     async fn config_builder(config: &S3StorageConfig) -> ServerResult<S3ConfigBuilder> {
-        let shared_config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+        let shared_config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let mut builder = S3ConfigBuilder::from(&shared_config);
 
         if let Some(credentials) = &config.credentials {
@@ -268,7 +268,7 @@ impl StorageBackend for S3Backend {
         let completed_parts = join_all(parts)
             .await
             .into_iter()
-            .map(|join_result| join_result.unwrap())
+            .map(|join_result| join_result.unwrap().map_err(Box::new))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(ServerError::storage_error)?
             .into_iter()

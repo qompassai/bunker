@@ -17,47 +17,47 @@ use crate::error::BunkerResult;
 use crate::nix_store::StorePath;
 
 pub const NO_DEPS: TestNar = TestNar {
-    store_path: "/nix/store/nm1w9sdm6j6icmhd2q3260hl1w9zj6li-bunker-test-no-deps",
-    _original_file: include_bytes!("nar/nm1w9sdm6j6icmhd2q3260hl1w9zj6li-bunker-test-no-deps"),
-    nar: include_bytes!("nar/nm1w9sdm6j6icmhd2q3260hl1w9zj6li-bunker-test-no-deps.nar"),
-    export: include_bytes!("nar/nm1w9sdm6j6icmhd2q3260hl1w9zj6li-bunker-test-no-deps.export"),
-    closure: &["nm1w9sdm6j6icmhd2q3260hl1w9zj6li-bunker-test-no-deps"],
+    store_path: "/nix/store/3ksxviys4jpm1csykn9rgxig7lz9bp1f-bunker-test-no-deps",
+    _original_file: include_bytes!("nar/3ksxviys4jpm1csykn9rgxig7lz9bp1f-bunker-test-no-deps"),
+    nar: include_bytes!("nar/3ksxviys4jpm1csykn9rgxig7lz9bp1f-bunker-test-no-deps.nar"),
+    export: include_bytes!("nar/3ksxviys4jpm1csykn9rgxig7lz9bp1f-bunker-test-no-deps.export"),
+    closure: &["3ksxviys4jpm1csykn9rgxig7lz9bp1f-bunker-test-no-deps"],
 };
 
 pub const WITH_DEPS_A: TestNar = TestNar {
-    store_path: "/nix/store/n7q4i7rlmbk4xz8qdsxpm6jbhrnxraq2-bunker-test-with-deps-a",
-    _original_file: include_bytes!("nar/n7q4i7rlmbk4xz8qdsxpm6jbhrnxraq2-bunker-test-with-deps-a"),
-    nar: include_bytes!("nar/n7q4i7rlmbk4xz8qdsxpm6jbhrnxraq2-bunker-test-with-deps-a.nar"),
-    export: include_bytes!("nar/n7q4i7rlmbk4xz8qdsxpm6jbhrnxraq2-bunker-test-with-deps-a.export"),
+    store_path: "/nix/store/54352fsxc39kg2arpmwflqf18g7gk4f0-bunker-test-with-deps-a",
+    _original_file: include_bytes!("nar/54352fsxc39kg2arpmwflqf18g7gk4f0-bunker-test-with-deps-a"),
+    nar: include_bytes!("nar/54352fsxc39kg2arpmwflqf18g7gk4f0-bunker-test-with-deps-a.nar"),
+    export: include_bytes!("nar/54352fsxc39kg2arpmwflqf18g7gk4f0-bunker-test-with-deps-a.export"),
     closure: &[
-        "n7q4i7rlmbk4xz8qdsxpm6jbhrnxraq2-bunker-test-with-deps-a",
-        "544qcchwgcgpz3xi1bbml28f8jj6009p-bunker-test-with-deps-b",
-        "3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final",
+        "54352fsxc39kg2arpmwflqf18g7gk4f0-bunker-test-with-deps-a",
+        "ippll4bw3pm5si2j1bzz96dc18anmydv-bunker-test-with-deps-b",
+        "mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final",
     ],
 };
 
 pub const WITH_DEPS_B: TestNar = TestNar {
-    store_path: "/nix/store/544qcchwgcgpz3xi1bbml28f8jj6009p-bunker-test-with-deps-b",
-    _original_file: include_bytes!("nar/544qcchwgcgpz3xi1bbml28f8jj6009p-bunker-test-with-deps-b"),
-    nar: include_bytes!("nar/544qcchwgcgpz3xi1bbml28f8jj6009p-bunker-test-with-deps-b.nar"),
-    export: include_bytes!("nar/544qcchwgcgpz3xi1bbml28f8jj6009p-bunker-test-with-deps-b.export"),
+    store_path: "/nix/store/ippll4bw3pm5si2j1bzz96dc18anmydv-bunker-test-with-deps-b",
+    _original_file: include_bytes!("nar/ippll4bw3pm5si2j1bzz96dc18anmydv-bunker-test-with-deps-b"),
+    nar: include_bytes!("nar/ippll4bw3pm5si2j1bzz96dc18anmydv-bunker-test-with-deps-b.nar"),
+    export: include_bytes!("nar/ippll4bw3pm5si2j1bzz96dc18anmydv-bunker-test-with-deps-b.export"),
     closure: &[
-        "544qcchwgcgpz3xi1bbml28f8jj6009p-bunker-test-with-deps-b",
-        "3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final",
+        "ippll4bw3pm5si2j1bzz96dc18anmydv-bunker-test-with-deps-b",
+        "mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final",
     ],
 };
 
-/// Expected values for `3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final`.
+/// Expected values for `mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final`.
 pub const WITH_DEPS_C: TestNar = TestNar {
-    store_path: "/nix/store/3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final",
+    store_path: "/nix/store/mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final",
     _original_file: include_bytes!(
-        "nar/3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final"
+        "nar/mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final"
     ),
-    nar: include_bytes!("nar/3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final.nar"),
+    nar: include_bytes!("nar/mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final.nar"),
     export: include_bytes!(
-        "nar/3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final.export"
+        "nar/mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final.export"
     ),
-    closure: &["3k1wymic8p7h5pfcqfhh0jan8ny2a712-bunker-test-with-deps-c-final"],
+    closure: &["mj6ig1p2yjih59x35h5xr53xf8waq1ri-bunker-test-with-deps-c-final"],
 };
 
 /// A test NAR.

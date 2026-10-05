@@ -5,19 +5,9 @@
 
 [workspace]
 resolver = "3"
-members = ["bunker", "client", "server", "token"]
+members = ["bunker", "client", "server", "token", "proxy"]
 
 [workspace.dependencies]
-oqs = { version = "0.10.1", default-features = false, features = [
-  "kems",
-  "sigs",
-  "vendored",
-] }
-oqs-sys = { version = "0.10.1", default-features = false, features = [
-  "kems",
-  "sigs",
-  "vendored",
-] }
 
 [workspace.metadata]
 rustfmt = { edition = "2024" }

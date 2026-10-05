@@ -33,9 +33,12 @@ pub struct ApiClient {
     endpoint: Url,
     client: HttpClient,
 }
+/// Error returned by a Bunker API call.
 #[derive(Debug, Display)]
 pub enum ApiError {
+    /// {0}
     Structured(StructuredApiError),
+    /// HTTP {0}: {1}
     Unstructured(StatusCode, String),
 }
 #[derive(Debug, Clone, Deserialize)]
