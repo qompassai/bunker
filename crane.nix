@@ -17,6 +17,7 @@
 , boost
 , darwin
 , libiconv
+, openssl
 , extraPackageArgs ? {}
 }:
 let
@@ -91,6 +92,18 @@ let
   bunker-client = mkBunker {
     cargoExtraArgs = " -p bunker-client";
   };
+  bunker-proxy = craneLib.buildPackage ({
+    pname = "bunker-proxy";
+    inherit src version nativeBuildInputs;
+    buildInputs = buildInputs ++ [ openssl ];
+    doCheck = false;
+    cargoExtraArgs = "-p bunker-proxy";
+    CARGO_PROFILE_RELEASE_LTO = "fat";
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1";
+    meta = {
+      mainProgram = "bunker-proxy";
+    };
+  } // extraArgs);
   bunker-server = craneLib.buildPackage ({
     pname = "bunker-server";
     inherit src version nativeBuildInputs buildInputs;
@@ -120,5 +133,5 @@ let
     '';
   } // extraArgs);
 in {
-  inherit cargoArtifacts bunker bunker-client bunker-server bunker-tests;
+  inherit cargoArtifacts bunker bunker-client bunker-proxy bunker-server bunker-tests;
 }

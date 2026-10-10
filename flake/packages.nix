@@ -69,6 +69,7 @@ in
           inherit (cranePkgs)
             bunker
             bunker-client
+            bunker-proxy
             bunker-server
           ;
 
