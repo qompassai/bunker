@@ -5,6 +5,7 @@
 { stdenv
 , lib
 , buildPackages
+, cmake
 , craneLib
 , rust
 , runCommand
@@ -18,6 +19,7 @@
 , darwin
 , libiconv
 , openssl
+, perl
 , extraPackageArgs ? {}
 }:
 let
@@ -38,6 +40,13 @@ let
   nativeBuildInputs = [
     pkg-config
     installShellFiles
+    # The shared deps build compiles the whole workspace
+    # dependency graph, so build tools needed by any member's
+    # build scripts belong here: cmake for libz-ng-sys (drives
+    # zlib-ng with cmake) and perl for openssl-sys (the vendored
+    # OpenSSL build's Configure script needs it).
+    cmake
+    perl
   ];
   buildInputs = [
     nix boost
@@ -54,9 +63,22 @@ let
     "CARGO_TARGET_${rustTargetSpecEnv}_LINKER" = "${stdenv.cc.targetPrefix}cc";
   };
   extraArgs = crossArgs // extraPackageArgs;
+  # Deliberately no --cfg tokio_unstable in the Nix builds. The
+  # repo's .cargo/config.toml sets that flag for host builds,
+  # which makes pingora-runtime call tokio's unstable alt-timer
+  # API -- an API that only exists in tokio >= 1.49, while
+  # Cargo.lock pins tokio 1.45.1. Nothing in this workspace
+  # enables pingora's alt-timer option, so the stable path is
+  # the same behavior. RUSTFLAGS is the one lever cargo treats
+  # as a full replacement for config-file rustflags
+  # (CARGO_BUILD_RUSTFLAGS is merely joined with them), so it
+  # is set, to an inert marker cfg, on every derivation that
+  # compiles the workspace dependency graph.
+  sandboxRustflags = "--cfg bunker_nix_build";
   cargoArtifacts = craneLib.buildDepsOnly ({
     pname = "bunker";
     inherit src version nativeBuildInputs buildInputs;
+    RUSTFLAGS = sandboxRustflags;
     installCargoArtifactsMode = "use-zstd";
   } // extraArgs);
   mkBunker = args: craneLib.buildPackage ({
@@ -68,10 +90,24 @@ let
     cargoExtraArgs = "-p bunker-client -p bunker-server";
     postInstall = lib.optionalString (stdenv.hostPlatform == stdenv.buildPlatform) ''
       if [[ -f $out/bin/bunker ]]; then
+        # The binary links libnixstore and libstdc++, but its
+        # rpath is only patched in fixup, after postInstall --
+        # point the loader at those lib dirs for completion
+        # generation.
+        export LD_LIBRARY_PATH="${lib.makeLibraryPath [ nix stdenv.cc.cc.lib ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         installShellCompletion --cmd bunker \
           --bash <($out/bin/bunker gen-completions bash) \
           --zsh <($out/bin/bunker gen-completions zsh) \
           --fish <($out/bin/bunker gen-completions fish)
+      fi
+    '';
+    # The client binary links the nix C++ libraries, but cargo
+    # leaves its rpath empty and fixup only shrinks rpaths --
+    # add the lib dirs it needs or the installed binary cannot
+    # start.
+    postFixup = ''
+      if [[ -f $out/bin/bunker ]]; then
+        patchelf --add-rpath "${lib.makeLibraryPath [ nix stdenv.cc.cc.lib ]}" $out/bin/bunker
       fi
     '';
     meta = with lib; {
@@ -95,7 +131,14 @@ let
   bunker-proxy = craneLib.buildPackage ({
     pname = "bunker-proxy";
     inherit src version nativeBuildInputs;
+    # The proxy links the system openssl package here, but its
+    # dependency tree also builds OpenSSL from source (openssl-src
+    # in Cargo.lock; the vendored OpenSSL carries the ML-KEM
+    # hybrid groups) -- that is what the shared perl is for.
     buildInputs = buildInputs ++ [ openssl ];
+    # See sandboxRustflags above: no tokio_unstable cfg in the
+    # Nix build (the locked tokio predates the alt-timer API).
+    RUSTFLAGS = sandboxRustflags;
     doCheck = false;
     cargoExtraArgs = "-p bunker-proxy";
     CARGO_PROFILE_RELEASE_LTO = "fat";

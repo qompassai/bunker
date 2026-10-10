@@ -51,7 +51,7 @@ in
         inputs.crane.mkLib
         (craneLib:
           if perSystemConfig.bunker.toolchain == null then craneLib
-          else craneLib.overrideToolchain config.bunker.toolchain
+          else craneLib.overrideToolchain perSystemConfig.bunker.toolchain
         )
       ];
     in pkgs.callPackage ../crane.nix {
@@ -60,6 +60,18 @@ in
     });
 
     perSystem = { self', pkgs, config, cranePkgs, ... }: (lib.mkMerge [
+      {
+        # The locked nixpkgs ships cargo/rustc 1.80, which cannot parse
+        # the workspace's edition-2024 manifests. Pin the estate's Rust
+        # 1.99.0 toolchain via fenix (same channel as glass) so the
+        # crane builds use it; library inputs stay on the locked
+        # nixpkgs.
+        bunker.toolchain = (inputs.fenix.packages.${pkgs.system}.toolchainOf {
+          channel = "1.99.0";
+          sha256 = "sha256-zm3dyIY2T414ZRR3EhLOvptzG6gta4WZUcawzMUWtqI=";
+        }).toolchain;
+      }
+
       {
         _module.args.cranePkgs = makeCranePkgs pkgs;
 
