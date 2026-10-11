@@ -32,24 +32,24 @@ mod storage;
 
 use std::future::IntoFuture;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use axum::{
-    Router,
     extract::Extension,
-    http::{Uri, uri::Scheme},
+    http::{uri::Scheme, Uri},
+    Router,
 };
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, query::Statement};
+use sea_orm::{query::Statement, ConnectionTrait, Database, DatabaseConnection};
 use tokio::net::TcpListener;
 use tokio::sync::OnceCell;
 use tokio::time;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
-use access::http::{AuthState, apply_auth};
+use access::http::{apply_auth, AuthState};
 use bunker::cache::CacheName;
 use config::{Config, StorageConfig};
 use database::migration::{Migrator, MigratorTrait};
@@ -105,6 +105,11 @@ impl StateInner {
             database: OnceCell::new(),
             storage: OnceCell::new(),
         })
+    }
+
+    /// Returns the server configuration.
+    fn config(&self) -> &Config {
+        &self.config
     }
 
     /// Returns a handle to the database.

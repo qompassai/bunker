@@ -11,21 +11,21 @@ use std::sync::Arc;
 
 use axum::http;
 use axum::{
-    Router,
     body::Body,
     extract::{Extension, Path},
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     routing::get,
+    Router,
 };
-use futures::TryStreamExt as _;
 use futures::stream::BoxStream;
+use futures::TryStreamExt as _;
 use serde::Serialize;
 use tokio_util::io::ReaderStream;
 use tracing::instrument;
 
-use crate::database::BunkerDatabase;
 use crate::database::entity::chunk::ChunkModel;
+use crate::database::BunkerDatabase;
 use crate::error::{ErrorKind, ServerResult};
 use crate::narinfo::NarInfo;
 use crate::nix_manifest;
@@ -136,8 +136,12 @@ async fn get_store_path_info(
     let mut narinfo = object.to_nar_info(&nar)?;
 
     if narinfo.signature().is_none() {
-        let keypair = cache.keypair()?;
-        narinfo.sign(&keypair);
+        if let Some(hybrid_keypair) = state.config().hybrid_keypair() {
+            narinfo.sign_hybrid(hybrid_keypair);
+        } else {
+            let keypair = cache.keypair()?;
+            narinfo.sign(&keypair);
+        }
     }
 
     Ok(narinfo)
@@ -198,9 +202,10 @@ async fn get_nar(
         // single chunk
         // SAFETY: `chunks.len() == 1` guarantees `first()` is `Some`, and the
         // `any(Option::is_none)` check above guarantees the chunk is `Some`.
-        let chunk = chunks.first().and_then(Option::as_ref).ok_or_else(|| {
-            crate::error::ErrorKind::IncompleteNar
-        })?;
+        let chunk = chunks
+            .first()
+            .and_then(Option::as_ref)
+            .ok_or_else(|| crate::error::ErrorKind::IncompleteNar)?;
         let remote_file = &chunk.remote_file.0;
         let storage = state.storage().await?;
         match storage.download_file_db(remote_file, false).await? {

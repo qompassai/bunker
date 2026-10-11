@@ -52,7 +52,7 @@ use crate::error::{ErrorKind, ServerError, ServerResult};
 use crate::nix_manifest::{self, SpaceDelimitedList};
 use bunker::hash::Hash;
 use bunker::mime;
-use bunker::signing::NixKeypair;
+use bunker::signing::{HybridKeypair, NixKeypair};
 
 #[cfg(test)]
 mod tests;
@@ -192,6 +192,16 @@ impl NarInfo {
         self.signature = Some(signature);
     }
 
+    /// Signs the narinfo with a hybrid keypair and adds the signature to
+    /// the narinfo.
+    ///
+    /// The resulting signature is always a hybrid (Ed25519 + ML-DSA-65)
+    /// signature; there is no classical-only form of this operation.
+    pub fn sign_hybrid(&mut self, keypair: &HybridKeypair) {
+        let signature = self.sign_readonly_hybrid(keypair);
+        self.signature = Some(signature);
+    }
+
     /// Returns the fingerprint of the object.
     ///
     /// Returns an empty vector if the store path is malformed.
@@ -234,6 +244,12 @@ impl NarInfo {
 
     /// Signs the narinfo with a keypair, returning the signature.
     fn sign_readonly(&self, keypair: &NixKeypair) -> String {
+        let fingerprint = self.fingerprint();
+        keypair.sign(&fingerprint)
+    }
+
+    /// Signs the narinfo with a hybrid keypair, returning the signature.
+    fn sign_readonly_hybrid(&self, keypair: &HybridKeypair) -> String {
         let fingerprint = self.fingerprint();
         keypair.sign(&fingerprint)
     }

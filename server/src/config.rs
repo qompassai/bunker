@@ -9,16 +9,19 @@ use crate::access::{
 };
 use crate::narinfo::Compression as NixCompression;
 use crate::storage::{LocalStorageConfig, S3StorageConfig};
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use async_compression::Level as CompressionLevel;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
+use bunker::signing::HybridKeypair;
 use bunker_token::SignatureType;
 use derivative::Derivative;
 use serde::{de, Deserialize};
 use std::collections::HashSet;
 use std::env;
+use std::io::Read;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use xdg::BaseDirectories;
 
@@ -123,6 +126,20 @@ pub struct Config {
     #[serde(default = "Default::default")]
     pub jwt: JWTConfig,
 
+    /// Cache signing.
+    #[serde(default = "Default::default")]
+    pub signing: SigningConfig,
+
+    /// The hybrid signing keypair loaded from `signing.hybrid-secret-key-file`.
+    ///
+    /// Populated by [`load_config`] after deserialization; it is never read
+    /// from the TOML configuration itself. When present, narinfos are signed
+    /// with this key (hybrid Ed25519 + ML-DSA-65) instead of the per-cache
+    /// classical keypair stored in the database.
+    #[serde(skip)]
+    #[derivative(Debug = "ignore")]
+    pub hybrid_keypair: Option<Arc<HybridKeypair>>,
+
     /// (Deprecated Stub)
     ///
     /// This simply results in an error telling the user to update
@@ -190,6 +207,30 @@ impl From<JWTSigningConfig> for SignatureType {
             JWTSigningConfig::EdDSASignAndVerify(key) => Self::EdDSA(key),
         }
     }
+}
+
+/// Cache signing configuration.
+///
+/// The hybrid signing key itself is never stored in the configuration file:
+/// only its expected name and the path of the file holding it. The file is
+/// read and strictly validated when the configuration is loaded (see
+/// [`load_config`]), so a bad key fails `bunkerd --mode check-config` and
+/// server startup alike.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SigningConfig {
+    /// Expected name of the hybrid signing key.
+    ///
+    /// Must match the name embedded in the hybrid secret key file; a
+    /// mismatch is a hard error at load time.
+    #[serde(rename = "hybrid-key-name")]
+    #[serde(default = "Default::default")]
+    pub hybrid_key_name: Option<String>,
+
+    /// Path to the file containing the hybrid secret key in canonical
+    /// format (`{name}:{base64}` over a 96-byte payload).
+    #[serde(rename = "hybrid-secret-key-file")]
+    #[serde(default = "Default::default")]
+    pub hybrid_secret_key_file: Option<PathBuf>,
 }
 
 /// Database connection configuration.
@@ -527,6 +568,126 @@ fn default_default_retention_period() -> Duration {
     Duration::ZERO
 }
 
+/// Maximum size of a hybrid secret key file, in bytes.
+///
+/// The canonical representation of a 96-byte payload is 128 base64
+/// characters plus the key name and a colon; this bound is generous while
+/// keeping the read bounded.
+pub const HYBRID_SECRET_KEY_FILE_BYTES_MAX: u64 = 4096;
+
+/// Message signed as a self-check probe when a hybrid key is loaded.
+///
+/// Signing this message and verifying the signature against the derived
+/// public key proves that the secret and public halves of the loaded key
+/// correspond to each other.
+const HYBRID_KEY_PROBE_MESSAGE: &[u8] = b"bunker hybrid signing key self-check";
+
+/// Reads a hybrid secret key file and parses it in canonical format.
+///
+/// Fail-closed: the read is bounded to [`HYBRID_SECRET_KEY_FILE_BYTES_MAX`]
+/// bytes and the contents must parse strictly (valid key name, valid
+/// base64, payload of exactly 96 bytes: a 64-byte Ed25519 keypair followed
+/// by a 32-byte ML-DSA-65 seed). A trailing newline, as written by shell
+/// redirection, is accepted.
+pub fn read_hybrid_keypair_file(path: &Path) -> Result<HybridKeypair> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open hybrid secret key file: {}", path.display()))?;
+
+    let mut contents = Vec::new();
+    file.take(HYBRID_SECRET_KEY_FILE_BYTES_MAX + 1)
+        .read_to_end(&mut contents)
+        .with_context(|| format!("Failed to read hybrid secret key file: {}", path.display()))?;
+
+    if contents.len() as u64 > HYBRID_SECRET_KEY_FILE_BYTES_MAX {
+        return Err(anyhow!(
+            "Hybrid secret key file {} is too large: {} bytes (maximum {})",
+            path.display(),
+            contents.len(),
+            HYBRID_SECRET_KEY_FILE_BYTES_MAX
+        ));
+    }
+
+    let text = String::from_utf8(contents).map_err(|_| {
+        anyhow!(
+            "Hybrid secret key file {} is not valid UTF-8",
+            path.display()
+        )
+    })?;
+
+    HybridKeypair::from_str(text.trim())
+        .map_err(|e| anyhow!("Invalid hybrid secret key in {}: {e}", path.display()))
+}
+
+/// Loads a hybrid secret key file and validates it against the configured
+/// key name.
+///
+/// Fail-closed checks (see the Phase-5 key-management runbook):
+/// - the file parses strictly (canonical format, 96-byte payload);
+/// - the key name embedded in the file equals `expected_name`;
+/// - a probe signature verifies against the public key derived from the
+///   secret, proving the secret and public halves correspond.
+pub fn load_hybrid_keypair(expected_name: &str, path: &Path) -> Result<HybridKeypair> {
+    let keypair = read_hybrid_keypair_file(path)?;
+
+    if keypair.name() != expected_name {
+        return Err(anyhow!(
+            "Hybrid key name mismatch: the configuration expects {expected_name:?} \
+            but the key file {} contains {:?}. Refusing to start: signatures \
+            would be published under an unexpected identity.",
+            path.display(),
+            keypair.name()
+        ));
+    }
+
+    let probe_signature = keypair.sign(HYBRID_KEY_PROBE_MESSAGE);
+    keypair
+        .to_public_key()
+        .verify(HYBRID_KEY_PROBE_MESSAGE, &probe_signature)
+        .map_err(|e| {
+            anyhow!(
+                "Hybrid key in {} failed its load-time self-check:                 a probe signature does not verify against the derived                 public key ({e}). The key file is corrupt or its halves                 do not correspond.",
+                path.display()
+            )
+        })?;
+
+    Ok(keypair)
+}
+
+impl Config {
+    /// Loads the configured hybrid signing keypair, if any.
+    ///
+    /// `signing.hybrid-key-name` and `signing.hybrid-secret-key-file` must
+    /// be configured together or not at all; a half-configured hybrid key
+    /// is a hard error, never a silent fall-back to classical signing.
+    fn load_configured_hybrid_keypair(&mut self) -> Result<()> {
+        match (
+            &self.signing.hybrid_key_name,
+            &self.signing.hybrid_secret_key_file,
+        ) {
+            (None, None) => Ok(()),
+            (Some(name), Some(path)) => {
+                let keypair = load_hybrid_keypair(name, path)?;
+                tracing::info!("Loaded hybrid signing key {name:?} from {}", path.display());
+                self.hybrid_keypair = Some(Arc::new(keypair));
+                Ok(())
+            }
+            (Some(_), None) => Err(anyhow!(
+                "signing.hybrid-key-name is set but signing.hybrid-secret-key-file \
+                is missing; configure both or neither"
+            )),
+            (None, Some(_)) => Err(anyhow!(
+                "signing.hybrid-secret-key-file is set but signing.hybrid-key-name \
+                is missing; configure both or neither"
+            )),
+        }
+    }
+
+    /// Returns the configured hybrid signing keypair, if one was loaded.
+    pub fn hybrid_keypair(&self) -> Option<&HybridKeypair> {
+        self.hybrid_keypair.as_deref()
+    }
+}
+
 fn load_config_from_path(path: &Path) -> Result<Config> {
     tracing::info!("Using configurations: {:?}", path);
 
@@ -540,12 +701,16 @@ fn load_config_from_str(s: &str) -> Result<Config> {
 }
 
 /// Loads the configuration in the standard order.
+///
+/// After the TOML configuration is parsed, the configured hybrid signing
+/// key (if any) is loaded and validated, so every mode of the server —
+/// including `--mode check-config` — fails closed on a bad key.
 pub async fn load_config(config_path: Option<&Path>, allow_oobe: bool) -> Result<Config> {
-    if let Some(config_path) = config_path {
-        load_config_from_path(config_path)
+    let mut config = if let Some(config_path) = config_path {
+        load_config_from_path(config_path)?
     } else if let Ok(config_env) = env::var(ENV_CONFIG_BASE64) {
         let decoded = String::from_utf8(BASE64_STANDARD.decode(config_env.as_bytes())?)?;
-        load_config_from_str(&decoded)
+        load_config_from_str(&decoded)?
     } else {
         // Config from XDG
         let config_path = get_xdg_config_path()?;
@@ -555,8 +720,12 @@ pub async fn load_config(config_path: Option<&Path>, allow_oobe: bool) -> Result
             crate::oobe::run_oobe().await?;
         }
 
-        load_config_from_path(&config_path)
-    }
+        load_config_from_path(&config_path)?
+    };
+
+    config.load_configured_hybrid_keypair()?;
+
+    Ok(config)
 }
 
 pub fn get_xdg_config_path() -> anyhow::Result<PathBuf> {
@@ -571,4 +740,208 @@ pub fn get_xdg_data_path() -> anyhow::Result<PathBuf> {
     let data_path = xdg_dirs.create_data_directory("")?;
 
     Ok(data_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bunker::signing::hybrid::HYBRID_PUBKEY_LEN;
+    use bunker::signing::NixKeypair;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Throwaway Ed25519 key (base64 of the PKCS#8 PEM), generated solely
+    /// as a test fixture. Never used outside tests.
+    const TEST_TOKEN_ED25519_SECRET_BASE64: &str = "LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVndCQ0lFSUxpdlM2bDZvYzZTeWZYcnk1YUpsZmtYZEVnblZCQnVjOFg1K3VTWEFiMmUKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=";
+
+    fn temp_key_file(contents: &str) -> PathBuf {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "bunker-config-test-{}-{}.key",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn config_toml(signing: &str) -> String {
+        format!(
+            r#"
+[database]
+url = "sqlite::memory:"
+
+[storage]
+type = "local"
+path = "/tmp"
+
+[chunking]
+nar-size-threshold = 1
+min-size = 1024
+avg-size = 2048
+max-size = 4096
+
+[jwt.signing]
+token-ed25519-secret-base64 = "{TEST_TOKEN_ED25519_SECRET_BASE64}"
+
+{signing}
+"#
+        )
+    }
+
+    // --- Validation ---
+
+    #[test]
+    fn hybrid_keypair_file_roundtrip() {
+        let keypair = HybridKeypair::generate("cache.example.org-1").unwrap();
+        // A trailing newline, as written by shell redirection, is accepted.
+        let path = temp_key_file(&format!("{}\n", keypair.export_keypair()));
+
+        let loaded = read_hybrid_keypair_file(&path).unwrap();
+        assert_eq!(loaded.name(), "cache.example.org-1");
+        assert_eq!(loaded.export_public_key(), keypair.export_public_key());
+
+        let payload = loaded
+            .export_public_key()
+            .split_once(':')
+            .map(|(_, payload)| payload.to_string())
+            .unwrap();
+        assert_eq!(
+            BASE64_STANDARD.decode(payload).unwrap().len(),
+            HYBRID_PUBKEY_LEN
+        );
+
+        let signature = loaded.sign(b"message");
+        loaded.verify(b"message", &signature).unwrap();
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn load_hybrid_keypair_accepts_matching_name() {
+        let keypair = HybridKeypair::generate("cache.example.org-1").unwrap();
+        let path = temp_key_file(&keypair.export_keypair());
+
+        let loaded = load_hybrid_keypair("cache.example.org-1", &path).unwrap();
+        assert_eq!(loaded.name(), "cache.example.org-1");
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn config_loads_configured_hybrid_keypair() {
+        let keypair = HybridKeypair::generate("cache.example.org-1").unwrap();
+        let path = temp_key_file(&keypair.export_keypair());
+        let toml = config_toml(&format!(
+            "[signing]\nhybrid-key-name = \"cache.example.org-1\"\nhybrid-secret-key-file = {:?}",
+            path
+        ));
+
+        let mut config = load_config_from_str(&toml).unwrap();
+        config.load_configured_hybrid_keypair().unwrap();
+        let loaded = config.hybrid_keypair().expect("keypair must be loaded");
+        assert_eq!(loaded.name(), "cache.example.org-1");
+        assert_eq!(loaded.export_public_key(), keypair.export_public_key());
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn config_without_signing_loads_no_keypair() {
+        let mut config = load_config_from_str(&config_toml("")).unwrap();
+        config.load_configured_hybrid_keypair().unwrap();
+        assert!(config.hybrid_keypair().is_none());
+    }
+
+    // --- Adversarial ---
+
+    #[test]
+    fn load_hybrid_keypair_rejects_name_mismatch() {
+        let keypair = HybridKeypair::generate("cache.example.org-1").unwrap();
+        let path = temp_key_file(&keypair.export_keypair());
+
+        let err = load_hybrid_keypair("cache.example.org-2", &path).unwrap_err();
+        assert!(err.to_string().contains("name mismatch"), "got: {err}");
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn load_hybrid_keypair_rejects_mismatched_ed25519_halves() {
+        // Splice the public half of one key's Ed25519 keypair onto the
+        // secret half of another's. The strict parse succeeds (the payload
+        // is still 96 bytes), so only the load-time self-check (probe
+        // signature against the derived public key) can catch this.
+        let keypair = HybridKeypair::generate("cache.example.org-1").unwrap();
+        let other = HybridKeypair::generate("cache.example.org-1").unwrap();
+        let decode_payload = |export: &str| {
+            BASE64_STANDARD
+                .decode(export.split_once(':').unwrap().1)
+                .unwrap()
+        };
+        let mut bytes = decode_payload(&keypair.export_keypair());
+        let other_bytes = decode_payload(&other.export_keypair());
+        bytes[32..64].copy_from_slice(&other_bytes[32..64]);
+        let tampered = format!("cache.example.org-1:{}", BASE64_STANDARD.encode(bytes));
+        let path = temp_key_file(&tampered);
+
+        let err = load_hybrid_keypair("cache.example.org-1", &path).unwrap_err();
+        assert!(err.to_string().contains("self-check"), "got: {err}");
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn read_hybrid_keypair_file_rejects_classical_keypair() {
+        // A classical 64-byte Nix keypair is not a hybrid key: the payload
+        // length check must reject it (no silent classical fall-back).
+        let classical = NixKeypair::generate("cache.example.org-1").unwrap();
+        let path = temp_key_file(&classical.export_keypair());
+
+        assert!(read_hybrid_keypair_file(&path).is_err());
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn read_hybrid_keypair_file_rejects_corrupt_contents() {
+        let not_base64 = temp_key_file("cache.example.org-1:not*base64*here");
+        assert!(read_hybrid_keypair_file(&not_base64).is_err());
+        std::fs::remove_file(not_base64).ok();
+
+        let no_colon = temp_key_file("cache.example.org-1");
+        assert!(read_hybrid_keypair_file(&no_colon).is_err());
+        std::fs::remove_file(no_colon).ok();
+
+        let empty = temp_key_file("");
+        assert!(read_hybrid_keypair_file(&empty).is_err());
+        std::fs::remove_file(empty).ok();
+    }
+
+    #[test]
+    fn read_hybrid_keypair_file_rejects_missing_file() {
+        let path = std::env::temp_dir().join("bunker-config-test-does-not-exist.key");
+        assert!(read_hybrid_keypair_file(&path).is_err());
+    }
+
+    #[test]
+    fn read_hybrid_keypair_file_rejects_oversized_file() {
+        let oversized = "A".repeat(HYBRID_SECRET_KEY_FILE_BYTES_MAX as usize + 1);
+        let path = temp_key_file(&oversized);
+
+        let err = read_hybrid_keypair_file(&path).unwrap_err();
+        assert!(err.to_string().contains("too large"), "got: {err}");
+
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn config_rejects_half_configured_hybrid_key() {
+        let name_only = config_toml("[signing]\nhybrid-key-name = \"cache.example.org-1\"");
+        let mut config = load_config_from_str(&name_only).unwrap();
+        assert!(config.load_configured_hybrid_keypair().is_err());
+
+        let file_only = config_toml("[signing]\nhybrid-secret-key-file = \"/does/not/matter.key\"");
+        let mut config = load_config_from_str(&file_only).unwrap();
+        assert!(config.load_configured_hybrid_keypair().is_err());
+    }
 }

@@ -37,30 +37,30 @@ use ml_dsa::{
 use signature::{Signer as _, Verifier as _};
 
 use crate::error::BunkerResult;
-use crate::signing::{Error as SigningError, decode_string, validate_name};
+use crate::signing::{decode_string, validate_name, Error as SigningError};
 
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 
 /// Length of an Ed25519 signature in bytes.
 const ED25519_SIG_LEN: usize = 64;
 /// Length of an ML-DSA-65 signature in bytes (FIPS 204).
 const MLDSA65_SIG_LEN: usize = 3309;
 /// Length of a hybrid signature: Ed25519 || ML-DSA-65.
-const HYBRID_SIG_LEN: usize = ED25519_SIG_LEN + MLDSA65_SIG_LEN;
+pub const HYBRID_SIG_LEN: usize = ED25519_SIG_LEN + MLDSA65_SIG_LEN;
 
 /// Length of an Ed25519 keypair (secret || public) in bytes.
 const ED25519_KEYPAIR_LEN: usize = 64;
 /// Length of an ML-DSA-65 seed in bytes.
 const MLDSA65_SEED_LEN: usize = 32;
 /// Length of a hybrid keypair export: Ed25519 keypair || ML-DSA-65 seed.
-const HYBRID_KEYPAIR_LEN: usize = ED25519_KEYPAIR_LEN + MLDSA65_SEED_LEN;
+pub const HYBRID_KEYPAIR_LEN: usize = ED25519_KEYPAIR_LEN + MLDSA65_SEED_LEN;
 
 /// Length of an Ed25519 public key in bytes.
 const ED25519_PUBKEY_LEN: usize = 32;
 /// Length of an encoded ML-DSA-65 verifying key in bytes.
 const MLDSA65_VK_LEN: usize = 1952;
 /// Length of a hybrid public key export: Ed25519 pubkey || ML-DSA-65 vk.
-const HYBRID_PUBKEY_LEN: usize = ED25519_PUBKEY_LEN + MLDSA65_VK_LEN;
+pub const HYBRID_PUBKEY_LEN: usize = ED25519_PUBKEY_LEN + MLDSA65_VK_LEN;
 
 /// A hybrid Ed25519 + ML-DSA-65 keypair for signing.
 #[derive(Debug)]
@@ -148,6 +148,11 @@ impl HybridKeypair {
         }
     }
 
+    /// Returns the name of this key.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Signs a message with both Ed25519 and ML-DSA-65.
     ///
     /// Returns the canonical `{name}:base64(ed25519_sig || mldsa65_sig)}`.
@@ -202,6 +207,11 @@ impl HybridPublicKey {
         bytes.extend_from_slice(&self.ed25519[..]);
         bytes.extend_from_slice(self.mldsa.encode().as_slice());
         format!("{}:{}", self.name, BASE64_STANDARD.encode(bytes))
+    }
+
+    /// Returns the name of this key.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Verifies a hybrid signature.

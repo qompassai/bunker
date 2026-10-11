@@ -36,6 +36,8 @@ mod tests;
 
 pub mod hybrid;
 
+pub use hybrid::{HybridKeypair, HybridPublicKey};
+
 /// An ed25519 keypair for signing.
 #[derive(Debug)]
 pub struct NixKeypair {

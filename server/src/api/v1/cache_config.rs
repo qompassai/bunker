@@ -1,21 +1,21 @@
 //! Cache configuration endpoint.
 
-use anyhow::anyhow;
-use axum::extract::{Extension, Json, Path};
-use chrono::Utc;
-use sea_orm::sea_query::{Expr, OnConflict};
-use sea_orm::ActiveValue::Set;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-use tracing::instrument;
 use crate::database::entity::cache::{self, Entity as Cache};
 use crate::database::entity::Json as DbJson;
 use crate::error::{ErrorKind, ServerError, ServerResult};
 use crate::{RequestState, State};
+use anyhow::anyhow;
+use axum::extract::{Extension, Json, Path};
 use bunker::api::v1::cache_config::{
     CacheConfig, CreateCacheRequest, KeypairConfig, RetentionPeriodConfig,
 };
 use bunker::cache::CacheName;
 use bunker::signing::NixKeypair;
+use chrono::Utc;
+use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use tracing::instrument;
 #[instrument(skip_all, fields(cache_name))]
 pub(crate) async fn get_cache_config(
     Extension(state): Extension<State>,
@@ -30,7 +30,11 @@ pub(crate) async fn get_cache_config(
             Ok(cache)
         })
         .await?;
-    let public_key = cache.keypair()?.export_public_key();
+    let public_key = if let Some(hybrid_keypair) = state.config().hybrid_keypair() {
+        hybrid_keypair.export_public_key()
+    } else {
+        cache.keypair()?.export_public_key()
+    };
     let retention_period_config = if let Some(period) = cache.retention_period {
         RetentionPeriodConfig::Period(period as u32)
     } else {
