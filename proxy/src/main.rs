@@ -22,17 +22,28 @@
 //!
 //! Environment variables (all optional, defaults shown):
 //! - `BUNKER_PROXY_LISTEN`: `[::]:4430`
-//! - `BUNKER_PROXY_UPSTREAM`: `127.0.0.1:8080`
-//! - `BUNKER_PROXY_RATE_LIMIT_RPS`: `100` (requests per second per IP)
 //! - `BUNKER_PROXY_RATE_LIMIT_BURST`: `200` (max burst per IP)
+//! - `BUNKER_PROXY_RATE_LIMIT_RPS`: `100` (requests per second per IP)
+//! - `BUNKER_PROXY_TLS_CERT`: path to the TLS certificate file
+//! - `BUNKER_PROXY_TLS_KEY`: path to the TLS private key file
+//! - `BUNKER_PROXY_UPSTREAM`: `127.0.0.1:8080`
 //!
 //! CLI flags override environment variables. See `--help`.
+//!
+//! TLS material is resolved fail-closed, in this order:
+//! 1. `--tls-cert` and `--tls-key` together (or the matching env vars).
+//!    Giving exactly one of the two is a configuration error.
+//! 2. The XDG default paths `$XDG_CONFIG_HOME/bunker/bunker_cert.pem`
+//!    and `$XDG_CONFIG_HOME/bunker/bunker_key.pem`.
+//!
+//! If neither source yields both files, the proxy refuses to start.
+//! There is no plaintext fallback.
 
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -79,17 +90,31 @@ struct Config {
     #[arg(long, env = "BUNKER_PROXY_LISTEN", default_value = DEFAULT_LISTEN)]
     listen: String,
 
-    /// Upstream bunker server address (e.g., "127.0.0.1:8080").
-    #[arg(long, env = "BUNKER_PROXY_UPSTREAM", default_value = DEFAULT_UPSTREAM)]
-    upstream: String,
+    /// Rate limit: max burst requests per client IP.
+    #[arg(long, env = "BUNKER_PROXY_RATE_LIMIT_BURST", default_value_t = DEFAULT_RATE_LIMIT_BURST)]
+    rate_limit_burst: u64,
 
     /// Rate limit: max requests per second per client IP.
     #[arg(long, env = "BUNKER_PROXY_RATE_LIMIT_RPS", default_value_t = DEFAULT_RATE_LIMIT_RPS)]
     rate_limit_rps: u64,
 
-    /// Rate limit: max burst requests per client IP.
-    #[arg(long, env = "BUNKER_PROXY_RATE_LIMIT_BURST", default_value_t = DEFAULT_RATE_LIMIT_BURST)]
-    rate_limit_burst: u64,
+    /// Path to the TLS certificate file.
+    ///
+    /// Must be given together with `--tls-key`. When both are given they
+    /// win over the XDG default paths.
+    #[arg(long, env = "BUNKER_PROXY_TLS_CERT")]
+    tls_cert: Option<PathBuf>,
+
+    /// Path to the TLS private key file.
+    ///
+    /// Must be given together with `--tls-cert`. When both are given they
+    /// win over the XDG default paths.
+    #[arg(long, env = "BUNKER_PROXY_TLS_KEY")]
+    tls_key: Option<PathBuf>,
+
+    /// Upstream bunker server address (e.g., "127.0.0.1:8080").
+    #[arg(long, env = "BUNKER_PROXY_UPSTREAM", default_value = DEFAULT_UPSTREAM)]
+    upstream: String,
 }
 
 impl Config {
@@ -118,11 +143,18 @@ impl Config {
         if self.rate_limit_burst == 0 {
             return Err("rate_limit_burst must be > 0".to_string());
         }
+        if self.tls_cert.is_some() != self.tls_key.is_some() {
+            return Err(
+                "--tls-cert and --tls-key must be specified together (or neither)".to_string(),
+            );
+        }
         Ok(ValidatedConfig {
             listen,
-            upstream,
-            rate_limit_rps: self.rate_limit_rps,
             rate_limit_burst: self.rate_limit_burst,
+            rate_limit_rps: self.rate_limit_rps,
+            tls_cert: self.tls_cert.clone(),
+            tls_key: self.tls_key.clone(),
+            upstream,
         })
     }
 }
@@ -131,9 +163,16 @@ impl Config {
 #[derive(Debug, Clone)]
 struct ValidatedConfig {
     listen: SocketAddr,
-    upstream: SocketAddr,
-    rate_limit_rps: u64,
     rate_limit_burst: u64,
+    rate_limit_rps: u64,
+    /// TLS certificate path from `--tls-cert`, if given.
+    ///
+    /// Invariant (enforced by [`Config::validate`]): `tls_cert` and
+    /// `tls_key` are either both `Some` or both `None`.
+    tls_cert: Option<PathBuf>,
+    /// TLS private key path from `--tls-key`, if given.
+    tls_key: Option<PathBuf>,
+    upstream: SocketAddr,
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +340,12 @@ impl ProxyHttp for ReverseProxy {
 // TLS and main
 // ---------------------------------------------------------------------------
 
+/// The XDG default TLS paths under a config directory.
+fn tls_paths_from(config_dir: &str) -> (PathBuf, PathBuf) {
+    let base = PathBuf::from(config_dir).join("bunker");
+    (base.join("bunker_cert.pem"), base.join("bunker_key.pem"))
+}
+
 /// Load TLS certificate paths from XDG config.
 ///
 /// Returns `(cert_path, key_path)` or a human-readable error. Never
@@ -314,8 +359,20 @@ fn tls_paths() -> Result<(PathBuf, PathBuf), String> {
     if config_dir.len() > CONFIG_VALUE_BYTES_MAX {
         return Err("config directory path too long".to_string());
     }
-    let base = PathBuf::from(config_dir).join("bunker");
-    Ok((base.join("bunker_cert.pem"), base.join("bunker_key.pem")))
+    Ok(tls_paths_from(&config_dir))
+}
+
+/// Resolve the TLS paths given by `--tls-cert`/`--tls-key`.
+///
+/// Returns `Some` only when both flags are given; `Config::validate`
+/// rejects the half-specified case before this is consulted, so a single
+/// flag also yields `None` here and the caller falls back to the XDG
+/// default paths (unreachable for validated configs).
+fn flag_tls_paths(tls_cert: Option<&Path>, tls_key: Option<&Path>) -> Option<(PathBuf, PathBuf)> {
+    match (tls_cert, tls_key) {
+        (Some(cert), Some(key)) => Some((cert.to_path_buf(), key.to_path_buf())),
+        _ => None,
+    }
 }
 
 /// Build the TLS settings with 1.3-only and restricted ciphersuites.
@@ -325,8 +382,12 @@ fn tls_paths() -> Result<(PathBuf, PathBuf), String> {
 /// - Ciphersuites: `TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256` only.
 /// - Key exchange: X25519+ML-KEM-768 hybrid preferred, X25519 fallback.
 /// - Fails if cert/key are missing or unreadable (fail-closed, no plaintext fallback).
-fn build_tls() -> Result<TlsSettings, String> {
-    let (cert_path, key_path) = tls_paths()?;
+fn build_tls(config: &ValidatedConfig) -> Result<TlsSettings, String> {
+    let (cert_path, key_path) =
+        match flag_tls_paths(config.tls_cert.as_deref(), config.tls_key.as_deref()) {
+            Some(paths) => paths,
+            None => tls_paths()?,
+        };
     if !cert_path.exists() || !key_path.exists() {
         return Err(format!(
             "TLS certificate files not found in: {:?}\n\
@@ -383,7 +444,7 @@ fn main() -> Result<(), String> {
         "starting bunker-proxy"
     );
 
-    let tls_settings = build_tls()?;
+    let tls_settings = build_tls(&validated)?;
 
     let mut server = Server::new(None).map_err(|e| format!("server init failed: {}", e))?;
     server.bootstrap();
@@ -395,4 +456,98 @@ fn main() -> Result<(), String> {
     server.add_service(proxy);
     info!("listening on {}", validated.listen);
     server.run_forever()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(tls_cert: Option<&str>, tls_key: Option<&str>) -> Config {
+        Config {
+            listen: DEFAULT_LISTEN.to_string(),
+            rate_limit_burst: DEFAULT_RATE_LIMIT_BURST,
+            rate_limit_rps: DEFAULT_RATE_LIMIT_RPS,
+            tls_cert: tls_cert.map(PathBuf::from),
+            tls_key: tls_key.map(PathBuf::from),
+            upstream: DEFAULT_UPSTREAM.to_string(),
+        }
+    }
+
+    // --- Validation ---
+
+    #[test]
+    fn defaults_validate_unchanged() {
+        let validated = config(None, None).validate().unwrap();
+        assert_eq!(validated.listen.to_string(), "[::]:4430");
+        assert_eq!(validated.upstream.to_string(), "127.0.0.1:8080");
+        assert_eq!(validated.rate_limit_rps, 100);
+        assert_eq!(validated.rate_limit_burst, 200);
+        assert_eq!(validated.tls_cert, None);
+        assert_eq!(validated.tls_key, None);
+    }
+
+    #[test]
+    fn tls_flags_are_carried_through_validation() {
+        let validated = config(Some("/run/secrets/cert.pem"), Some("/run/secrets/key.pem"))
+            .validate()
+            .unwrap();
+        assert_eq!(
+            validated.tls_cert,
+            Some(PathBuf::from("/run/secrets/cert.pem"))
+        );
+        assert_eq!(
+            validated.tls_key,
+            Some(PathBuf::from("/run/secrets/key.pem"))
+        );
+    }
+
+    #[test]
+    fn flag_tls_paths_win_when_both_given() {
+        let cert = Path::new("/acme/fullchain.pem");
+        let key = Path::new("/acme/key.pem");
+        assert_eq!(
+            flag_tls_paths(Some(cert), Some(key)),
+            Some((cert.to_path_buf(), key.to_path_buf()))
+        );
+    }
+
+    #[test]
+    fn xdg_fallback_paths_are_the_documented_filenames() {
+        let (cert, key) = tls_paths_from("/home/test/.config");
+        assert_eq!(
+            cert,
+            PathBuf::from("/home/test/.config/bunker/bunker_cert.pem")
+        );
+        assert_eq!(
+            key,
+            PathBuf::from("/home/test/.config/bunker/bunker_key.pem")
+        );
+    }
+
+    // --- Adversarial ---
+
+    #[test]
+    fn cert_without_key_is_rejected() {
+        let err = config(Some("/run/secrets/cert.pem"), None)
+            .validate()
+            .unwrap_err();
+        assert!(err.contains("together"), "got: {err}");
+    }
+
+    #[test]
+    fn key_without_cert_is_rejected() {
+        let err = config(None, Some("/run/secrets/key.pem"))
+            .validate()
+            .unwrap_err();
+        assert!(err.contains("together"), "got: {err}");
+    }
+
+    #[test]
+    fn flag_tls_paths_fall_back_when_incomplete() {
+        let cert = Path::new("/acme/fullchain.pem");
+        let key = Path::new("/acme/key.pem");
+        assert_eq!(flag_tls_paths(Some(cert), None), None);
+        assert_eq!(flag_tls_paths(None, Some(key)), None);
+        assert_eq!(flag_tls_paths(None, None), None);
+    }
 }
