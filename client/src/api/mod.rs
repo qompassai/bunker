@@ -295,6 +295,45 @@ impl ApiClient {
         }
     }
 
+    /// Deletes one artifact from a cache.
+    ///
+    /// You need the `delete` permission on the cache.
+    ///
+    /// The address names one literal version: `latest` is not
+    /// resolved here, because a delete must name exactly the
+    /// artifact its caller means. The server removes the
+    /// artifact's row, settles the `latest` pointer, and
+    /// deletes the stored object when no other artifact in the
+    /// cache shares its digest.
+    pub async fn delete_artifact(
+        &self,
+        cache: &CacheName,
+        name: &str,
+        version: &str,
+        filename: &str,
+    ) -> Result<()> {
+        validate_artifact_address(name, version, filename)?;
+
+        let endpoint = self.endpoint.join(&format!(
+            "_api/v1/artifacts/{}/{}/{}/{}",
+            cache, name, version, filename
+        ))?;
+
+        let res = self
+            .client
+            .delete(endpoint)
+            .header(USER_AGENT, HeaderValue::from_str(BUNKER_USER_AGENT)?)
+            .send()
+            .await?;
+
+        if res.status().is_success() {
+            Ok(())
+        } else {
+            let api_error = ApiError::try_from_response(res).await?;
+            Err(api_error.into())
+        }
+    }
+
     /// Downloads an artifact from a cache to a local path.
     ///
     /// `version` may be `latest`, in which case the server

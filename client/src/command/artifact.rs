@@ -2,8 +2,9 @@
 //!
 //! Artifacts are release binaries stored in a cache next to the
 //! Nix binary cache data. They are addressed by content digest
-//! on the server; `push` uploads them and `pull` downloads
-//! them, verifying the bytes against the served digest.
+//! on the server; `push` uploads them, `pull` downloads them
+//! (verifying the bytes against the served digest), and `rm`
+//! deletes them.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +30,7 @@ pub struct Artifact {
 enum Command {
     Pull(Pull),
     Push(Push),
+    Rm(Rm),
 }
 
 /// Download an artifact from a cache.
@@ -110,6 +112,7 @@ pub async fn run(opts: Opts) -> Result<()> {
     match &sub.command {
         Command::Pull(pull) => pull_artifact(pull).await,
         Command::Push(push) => push_artifact(push).await,
+        Command::Rm(rm) => rm_artifact(rm).await,
     }
 }
 
@@ -186,6 +189,61 @@ async fn push_artifact(args: &Push) -> Result<()> {
     );
     println!("sha256: {}", response.sha256);
     println!("size: {} bytes", response.size);
+
+    Ok(())
+}
+
+/// Delete an artifact from a cache.
+///
+/// You need the `delete` permission on the cache.
+///
+/// The version is named literally: unlike `pull`, `latest` is
+/// not resolved, because a delete must name exactly the
+/// artifact its caller means. Deleting a version the `latest`
+/// pointer names moves the pointer to the newest remaining
+/// version of the name. The stored object is removed when no
+/// other artifact in the cache shares its contents.
+#[derive(Debug, Clone, Parser)]
+#[command(disable_version_flag = true)]
+struct Rm {
+    /// The cache to delete from.
+    ///
+    /// This can be either `servername:cachename` or `cachename`
+    /// when using the default server.
+    cache: CacheRef,
+
+    /// Name of the artifact (e.g. `light-show`).
+    #[clap(long)]
+    name: String,
+
+    /// Version of the artifact (e.g. `1.4.2`). Always a
+    /// literal version; `latest` does not resolve here.
+    #[clap(long)]
+    version: String,
+
+    /// File name of the artifact (e.g. `light-show.tar.gz`).
+    #[clap(long)]
+    file: String,
+}
+
+async fn rm_artifact(args: &Rm) -> Result<()> {
+    let config = Config::load()?;
+    let (_server_name, server, cache_name) = config.resolve_cache(&args.cache)?;
+
+    let mut api = ApiClient::from_server_config(server.clone())?;
+
+    // Confirm remote cache validity, query cache config.
+    let cache_config = api.get_cache_config(cache_name).await?;
+
+    if let Some(api_endpoint) = &cache_config.api_endpoint {
+        // Use delegated API endpoint.
+        api.set_endpoint(api_endpoint)?;
+    }
+
+    api.delete_artifact(cache_name, &args.name, &args.version, &args.file)
+        .await?;
+
+    println!("Deleted {} {} ({})", args.name, args.version, args.file);
 
     Ok(())
 }
