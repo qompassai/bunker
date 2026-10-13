@@ -1,6 +1,7 @@
 //! Client configurations.
 //!
-//! Configuration files are stored under `$XDG_CONFIG_HOME/bunker/config.toml`.
+//! Configuration files are stored under `$XDG_CONFIG_HOME/bunker/config.toml`
+//! on Unix, and under `%APPDATA%\bunker\config.toml` on Windows.
 //! We automatically write modified configurations back for a good end-user
 //! experience (e.g., `bunker login`).
 
@@ -16,14 +17,16 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use xdg::BaseDirectories;
 
 use crate::cache::{CacheName, CacheRef, ServerName};
 
-/// Application prefix in XDG base directories.
+/// Directory name holding the client configuration.
 ///
-/// This will be concatenated into `$XDG_CONFIG_HOME/bunker`.
-const XDG_PREFIX: &str = "bunker";
+/// The configuration lives in `$XDG_CONFIG_HOME/bunker` on Unix and
+/// in `%APPDATA%\bunker` on Windows.
+const CONFIG_DIR_NAME: &str = "bunker";
 
 /// The permission the configuration file should have.
 #[cfg(unix)]
@@ -224,9 +227,29 @@ impl<'a> Drop for ConfigWriteGuard<'a> {
     }
 }
 
+/// Resolves the path of the client configuration file, creating
+/// the containing directory if it does not exist yet.
+///
+/// Unix resolves through the `xdg` crate; that crate has no Windows
+/// support (its `BaseDirectories` type is Unix-only), so Windows
+/// resolves `%APPDATA%` directly. The roaming profile directory is
+/// private to the user account, which is what the Unix 0o600 file
+/// mode protects on that side.
 fn get_config_path() -> Result<PathBuf> {
-    let xdg_dirs = BaseDirectories::with_prefix(XDG_PREFIX)?;
-    let config_path = xdg_dirs.place_config_file("config.toml")?;
-
-    Ok(config_path)
+    #[cfg(unix)]
+    {
+        let xdg_dirs = BaseDirectories::with_prefix(CONFIG_DIR_NAME)?;
+        Ok(xdg_dirs.place_config_file("config.toml")?)
+    }
+    #[cfg(not(unix))]
+    {
+        let appdata = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                anyhow!("APPDATA is not set; cannot locate the configuration directory")
+            })?;
+        let dir = appdata.join(CONFIG_DIR_NAME);
+        fs::create_dir_all(&dir)?;
+        Ok(dir.join("config.toml"))
+    }
 }
