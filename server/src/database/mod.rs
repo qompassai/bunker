@@ -9,7 +9,7 @@ use chrono::Utc;
 use sea_orm::entity::prelude::*;
 use sea_orm::entity::Iterable as EnumIterable;
 use sea_orm::query::{JoinType, QueryOrder, QuerySelect, QueryTrait};
-use sea_orm::sea_query::{Expr, LockBehavior, LockType, Query, Value};
+use sea_orm::sea_query::{Expr, LockBehavior, LockType, OnConflict, Query, Value};
 use sea_orm::{ActiveValue::Set, ConnectionTrait, DatabaseConnection, FromQueryResult};
 use tokio::task;
 
@@ -18,6 +18,8 @@ use crate::narinfo::Compression;
 use bunker::cache::CacheName;
 use bunker::hash::Hash;
 use bunker::nix_store::StorePathHash;
+use entity::artifact::{ArtifactModel, Entity as Artifact};
+use entity::artifact_latest::{self, Entity as ArtifactLatest};
 use entity::cache::{self, CacheModel, Entity as Cache};
 use entity::chunk::{self, ChunkModel, ChunkState, Entity as Chunk};
 use entity::chunkref;
@@ -44,6 +46,37 @@ pub trait BunkerDatabase: Send + Sync {
 
     /// Retrieves a binary cache.
     async fn find_cache(&self, cache: &CacheName) -> ServerResult<CacheModel>;
+
+    /// Resolves the `latest` pointer of an artifact name in a
+    /// cache to the artifact it currently names.
+    ///
+    /// Returns `None` when the cache has no pointer for the name.
+    /// The pointer is the only source of truth for `latest`; there
+    /// is deliberately no fallback to the newest upload.
+    // Scoped allow: the async_trait macro trips the pre-existing
+    // double_must_use lint; M1 adds no new clippy findings.
+    #[allow(clippy::double_must_use)]
+    async fn find_artifact_latest(
+        &self,
+        cache_id: i64,
+        name: &str,
+    ) -> ServerResult<Option<ArtifactModel>>;
+
+    /// Sets the `latest` pointer of an artifact name in a cache,
+    /// inserting the pointer row if it does not exist yet.
+    ///
+    /// This only moves the pointer. Callers must invoke it inside
+    /// the same transaction that finalizes an artifact upload, so
+    /// `latest` can never name an unverified artifact.
+    // Scoped allow: the async_trait macro trips the pre-existing
+    // double_must_use lint; M1 adds no new clippy findings.
+    #[allow(clippy::double_must_use)]
+    async fn set_artifact_latest(
+        &self,
+        cache_id: i64,
+        name: &str,
+        artifact_id: i64,
+    ) -> ServerResult<()>;
 
     /// Retrieves and locks a valid NAR matching a NAR Hash.
     async fn find_and_lock_nar(&self, nar_hash: &Hash) -> ServerResult<Option<NarGuard>>;
@@ -231,6 +264,54 @@ impl BunkerDatabase for DatabaseConnection {
             .await
             .map_err(ServerError::database_error)?
             .ok_or_else(|| ErrorKind::NoSuchCache.into())
+    }
+
+    async fn find_artifact_latest(
+        &self,
+        cache_id: i64,
+        name: &str,
+    ) -> ServerResult<Option<ArtifactModel>> {
+        let latest = ArtifactLatest::find_by_id((cache_id, name.to_owned()))
+            .one(self)
+            .await
+            .map_err(ServerError::database_error)?;
+
+        let Some(latest) = latest else {
+            return Ok(None);
+        };
+
+        Artifact::find_by_id(latest.latest_artifact_id)
+            .one(self)
+            .await
+            .map_err(ServerError::database_error)
+    }
+
+    async fn set_artifact_latest(
+        &self,
+        cache_id: i64,
+        name: &str,
+        artifact_id: i64,
+    ) -> ServerResult<()> {
+        let insert = ArtifactLatest::insert(artifact_latest::ActiveModel {
+            cache_id: Set(cache_id),
+            name: Set(name.to_owned()),
+            latest_artifact_id: Set(artifact_id),
+        })
+        .on_conflict(
+            OnConflict::columns([
+                artifact_latest::Column::CacheId,
+                artifact_latest::Column::Name,
+            ])
+            .update_columns([artifact_latest::Column::LatestArtifactId])
+            .to_owned(),
+        );
+
+        insert
+            .exec(self)
+            .await
+            .map_err(ServerError::database_error)?;
+
+        Ok(())
     }
 
     async fn find_and_lock_nar(&self, nar_hash: &Hash) -> ServerResult<Option<NarGuard>> {
