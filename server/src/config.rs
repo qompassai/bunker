@@ -122,6 +122,10 @@ pub struct Config {
     #[serde(default = "Default::default")]
     pub garbage_collection: GarbageCollectionConfig,
 
+    /// Artifact serving.
+    #[serde(default = "Default::default")]
+    pub artifacts: ArtifactsConfig,
+
     /// JSON Web Token.
     #[serde(default = "Default::default")]
     pub jwt: JWTConfig,
@@ -149,6 +153,32 @@ pub struct Config {
     #[serde(deserialize_with = "deserialize_deprecated_token_hs256_secret")]
     #[derivative(Debug = "ignore")]
     pub _depreated_token_hs256_secret: Option<String>,
+}
+
+/// Default maximum size of a single artifact upload: 1 GiB.
+pub const DEFAULT_MAX_ARTIFACT_SIZE: u64 = 1 << 30;
+
+/// Artifact serving configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArtifactsConfig {
+    /// Maximum size of a single artifact upload, in bytes.
+    ///
+    /// Uploads whose body exceeds this are rejected while they
+    /// stream; nothing is stored for them.
+    #[serde(rename = "max-size", default = "default_max_artifact_size")]
+    pub max_size: u64,
+}
+
+impl Default for ArtifactsConfig {
+    fn default() -> Self {
+        Self {
+            max_size: DEFAULT_MAX_ARTIFACT_SIZE,
+        }
+    }
+}
+
+fn default_max_artifact_size() -> u64 {
+    DEFAULT_MAX_ARTIFACT_SIZE
 }
 
 /// JSON Web Token configuration.
