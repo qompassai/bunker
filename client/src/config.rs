@@ -1,28 +1,35 @@
 //! Client configurations.
 //!
-//! Configuration files are stored under `$XDG_CONFIG_HOME/bunker/config.toml`.
+//! Configuration files are stored under `$XDG_CONFIG_HOME/bunker/config.toml`
+//! on Unix, and under `%APPDATA%\bunker\config.toml` on Windows.
 //! We automatically write modified configurations back for a good end-user
 //! experience (e.g., `bunker login`).
 
 use std::collections::HashMap;
-use std::fs::{self, read_to_string, OpenOptions, Permissions};
+#[cfg(unix)]
+use std::fs::Permissions;
+use std::fs::{self, read_to_string, OpenOptions};
 use std::io::Write;
 use std::ops::{Deref, DerefMut};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use xdg::BaseDirectories;
 
 use crate::cache::{CacheName, CacheRef, ServerName};
 
-/// Application prefix in XDG base directories.
+/// Directory name holding the client configuration.
 ///
-/// This will be concatenated into `$XDG_CONFIG_HOME/bunker`.
-const XDG_PREFIX: &str = "bunker";
+/// The configuration lives in `$XDG_CONFIG_HOME/bunker` on Unix and
+/// in `%APPDATA%\bunker` on Windows.
+const CONFIG_DIR_NAME: &str = "bunker";
 
 /// The permission the configuration file should have.
+#[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
 
 /// Configuration loader.
@@ -117,17 +124,19 @@ impl Config {
 
             // This isn't atomic, so some other process might chmod it
             // to something else before we write. We don't handle this case.
+            // The 0600 mode is Unix-only; other platforms rely on the
+            // per-user profile directory being private.
+            #[cfg(unix)]
             if path.exists() {
                 let permissions = Permissions::from_mode(FILE_MODE);
                 fs::set_permissions(path, permissions)?;
             }
 
-            let mut file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .mode(FILE_MODE)
-                .open(path)?;
+            let mut options = OpenOptions::new();
+            options.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            options.mode(FILE_MODE);
+            let mut file = options.open(path)?;
 
             file.write_all(serialized.as_bytes())?;
 
@@ -218,9 +227,29 @@ impl<'a> Drop for ConfigWriteGuard<'a> {
     }
 }
 
+/// Resolves the path of the client configuration file, creating
+/// the containing directory if it does not exist yet.
+///
+/// Unix resolves through the `xdg` crate; that crate has no Windows
+/// support (its `BaseDirectories` type is Unix-only), so Windows
+/// resolves `%APPDATA%` directly. The roaming profile directory is
+/// private to the user account, which is what the Unix 0o600 file
+/// mode protects on that side.
 fn get_config_path() -> Result<PathBuf> {
-    let xdg_dirs = BaseDirectories::with_prefix(XDG_PREFIX)?;
-    let config_path = xdg_dirs.place_config_file("config.toml")?;
-
-    Ok(config_path)
+    #[cfg(unix)]
+    {
+        let xdg_dirs = BaseDirectories::with_prefix(CONFIG_DIR_NAME)?;
+        Ok(xdg_dirs.place_config_file("config.toml")?)
+    }
+    #[cfg(not(unix))]
+    {
+        let appdata = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                anyhow!("APPDATA is not set; cannot locate the configuration directory")
+            })?;
+        let dir = appdata.join(CONFIG_DIR_NAME);
+        fs::create_dir_all(&dir)?;
+        Ok(dir.join("config.toml"))
+    }
 }

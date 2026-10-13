@@ -9,7 +9,7 @@ name = "bunker"
 path = "src/main.rs"
 
 [dependencies]
-bunker = { path = "../bunker" }
+bunker = { path = "../bunker", default-features = false, features = ["chunking", "stream", "tokio"] }
 
 anyhow = "1.0.71"
 async-channel = "2.3.1"
@@ -25,7 +25,7 @@ hex = "0.4.3"
 humantime = "2.1.0"
 indicatif = "0.17.3"
 lazy_static = "1.4.0"
-notify = { version = "7.0.0", default-features = false, features = ["macos_kqueue"] }
+notify = { version = "7.0.0", default-features = false, features = ["macos_kqueue"], optional = true }
 regex = "1.8.3"
 reqwest = { version = "0.12.4", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "stream"] }
 serde = { version = "1.0.163", features = ["derive"] }
@@ -48,3 +48,12 @@ features = [
 	"rt-multi-thread",
 	"sync",
 ]
+
+[features]
+default = ["nix"]
+
+# Nix store support: the `push`, `watch-store`, `get-closure` and `use`
+# subcommands, backed by libnixstore through the `bunker` library.
+# Disable for subset builds (Windows, Android) which only ship the
+# pure-HTTP commands: artifact, cache, login.
+nix = ["bunker/nix_store", "dep:notify"]
