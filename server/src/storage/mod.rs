@@ -63,6 +63,57 @@ pub(crate) fn artifact_key(cache_id: i64, sha256: &[u8; 32]) -> String {
     format!("artifact/{}/{}/{}", cache_id, &sha256_hex[..2], sha256_hex)
 }
 
+/// Returns the temporary storage key an in-flight artifact
+/// upload streams to before its bytes are verified and moved to
+/// their [`artifact_key`].
+///
+/// The key is derived from the `artifact_upload` row's primary
+/// key alone, so the row is the source of truth for its temp
+/// object: the garbage collector can address the temp object of
+/// any expired upload row, and destroying a cache can reap the
+/// temp objects of its in-flight uploads, without any separate
+/// key bookkeeping.
+///
+/// Temp keys never appear in an API response and no endpoint
+/// accepts a storage key from a client, so a sequential row ID
+/// is not a capability here — the key only has to be unique per
+/// upload attempt and server-generated, and a primary key is
+/// both.
+pub(crate) fn artifact_upload_key(upload_id: i64) -> String {
+    format!("artifact-upload/{upload_id}")
+}
+
+/// Deletes the object at `name`, treating an already-absent
+/// object as success.
+///
+/// Backends disagree on deleting a missing object: S3 deletes
+/// are idempotent, while the local backend's file removal
+/// reports an error. Callers that clean up objects whose
+/// presence is uncertain (temp objects, objects whose upload
+/// may have died before placement) need one answer to "is it
+/// gone?", so on a delete error this probes readability: if the
+/// object cannot be read either, it is gone and this returns
+/// `Ok(false)`; if it can still be read, the delete genuinely
+/// failed and the original error is returned.
+///
+/// Returns `Ok(true)` when this call deleted the object.
+///
+/// The probe relies on [`StorageBackend::get_range`]; both
+/// in-tree backends implement it. A backend that does not would
+/// have every failed delete misread as an absent object.
+pub(crate) async fn delete_file_if_present(
+    storage: &dyn StorageBackend,
+    name: &str,
+) -> ServerResult<bool> {
+    match storage.delete_file(name.to_owned()).await {
+        Ok(()) => Ok(true),
+        Err(delete_error) => match storage.get_range(name.to_owned(), 0, 1).await {
+            Ok(_) => Err(delete_error),
+            Err(_) => Ok(false),
+        },
+    }
+}
+
 // TODO: Maybe make RemoteFile the one true reference instead of having two sets of APIs?
 /// A storage backend.
 #[async_trait::async_trait]
@@ -197,5 +248,16 @@ mod tests {
         // key in a different shard.
         let other = artifact_key(7, &sha256_of(b"other bytes"));
         assert_ne!(other, artifact_key(7, &digest));
+    }
+
+    #[test]
+    fn artifact_upload_key_is_the_row_id_under_the_upload_prefix() {
+        assert_eq!(artifact_upload_key(1), "artifact-upload/1");
+        assert_eq!(artifact_upload_key(42), "artifact-upload/42");
+
+        // Distinct rows never share a temp key, and a temp key is
+        // never a final artifact key.
+        assert_ne!(artifact_upload_key(1), artifact_upload_key(2));
+        assert!(!artifact_upload_key(1).starts_with("artifact/"));
     }
 }

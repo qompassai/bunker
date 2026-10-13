@@ -12,6 +12,10 @@ pub(crate) fn get_router() -> Router {
     Router::new()
         .route("/_api/v1/artifacts", put(artifacts::upload_artifact))
         .route(
+            "/_api/v1/artifacts/:cache/:name/:version/:file",
+            delete(artifacts::delete_artifact),
+        )
+        .route(
             "/_api/v1/get-missing-paths",
             post(get_missing_paths::get_missing_paths),
         )

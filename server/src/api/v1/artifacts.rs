@@ -1,4 +1,4 @@
-//! Artifact upload endpoint.
+//! Artifact upload and delete endpoints.
 //!
 //! `PUT /_api/v1/artifacts` stores one release artifact (a
 //! tarball, an installer, a disk image) in a cache, next to the
@@ -6,10 +6,18 @@
 //! no narinfo is read or written, no NAR is chunked, and garbage
 //! collection never sees these objects.
 //!
+//! `DELETE /_api/v1/artifacts/:cache/:name/:version/:file`
+//! removes one artifact again: its row, its claim on the
+//! `latest` pointer, and — when no other artifact in the cache
+//! shares its digest — its stored object. This module also
+//! holds the storage reap that cache destruction runs for its
+//! artifacts.
+//!
 //! Authorization reuses the binary cache's machinery unchanged:
 //! the caller's JWT (already decoded by the `apply_auth`
 //! middleware into the request's [`AuthState`]) must grant the
-//! `push` permission on the target cache.
+//! `push` permission on the target cache for an upload, and
+//! the `delete` permission for a delete.
 //!
 //! The upload is recorded in `artifact_upload` before the first
 //! body byte is stored, the body is streamed to a temporary
@@ -27,32 +35,35 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use axum::body::Body;
-use axum::extract::Extension;
+use axum::extract::{Extension, Path};
 use axum::http::HeaderMap;
 use axum::Json;
 use bunker::api::v1::artifacts::{
     ArtifactUploadRequest, ArtifactUploadResponse, BUNKER_ARTIFACT_INFO, BUNKER_ARTIFACT_SHA256,
     BUNKER_ARTIFACT_SIZE,
 };
+use bunker::cache::CacheName;
 use bunker::stream::StreamHasher;
 use chrono::{Duration, Utc};
 use futures::StreamExt;
 use sea_orm::sea_query::OnConflict;
 use sea_orm::ActiveValue::Set;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, TransactionTrait,
 };
 use sha2::{Digest, Sha256};
 use tokio_util::io::StreamReader;
 use tracing::instrument;
-use uuid::Uuid;
 
 use crate::access::http::AuthState;
 use crate::database::entity::artifact::{self, Entity as Artifact};
 use crate::database::entity::artifact_latest::{self, Entity as ArtifactLatest};
 use crate::database::entity::artifact_upload::{self, Entity as ArtifactUpload};
 use crate::error::{ErrorKind, ServerError, ServerResult};
-use crate::storage::{artifact_key, Download, StorageBackend};
+use crate::storage::{
+    artifact_key, artifact_upload_key, delete_file_if_present, Download, StorageBackend,
+};
 use crate::{RequestState, State};
 
 /// Maximum length of an artifact name, in characters.
@@ -72,10 +83,19 @@ pub(crate) const MAX_FILENAME_LEN: usize = 128;
 
 /// How long an upload row is kept before it is considered stale.
 ///
-/// Upload rows are bookkeeping, not artifacts; a row that never
-/// resolves is garbage for a future cleanup pass. Nothing in M2
-/// reaps them yet.
+/// Upload rows are bookkeeping, not artifacts. Every row is
+/// written with an expiry this far out, and the garbage
+/// collector reaps rows (and any temp object they left behind)
+/// once they pass it — see `crate::gc`.
 const UPLOAD_TTL_HOURS: i64 = 24;
+
+/// The version token reserved for the `latest` alias.
+///
+/// `latest` is resolved through the `artifact_latest` pointer
+/// on the download side; it is never the version of a stored
+/// artifact. Uploads naming it are rejected, so the alias can
+/// never be shadowed by a literal version of the same name.
+const RESERVED_VERSION_LATEST: &str = "latest";
 
 /// The upload is being received.
 const UPLOAD_STATE_RECEIVING: &str = "receiving";
@@ -207,7 +227,7 @@ pub(crate) async fn upload_artifact_inner(
 
     // From here on the upload row exists; every failure path must
     // resolve it as failed rather than leave it receiving forever.
-    let result = receive_and_store(database, storage, cache.id, params, body).await;
+    let result = receive_and_store(database, storage, cache.id, upload.id, params, body).await;
 
     match result {
         Ok(response) => {
@@ -229,6 +249,7 @@ async fn receive_and_store(
     database: &DatabaseConnection,
     storage: &dyn StorageBackend,
     cache_id: i64,
+    upload_id: i64,
     params: &UploadParams<'_>,
     body: Body,
 ) -> ServerResult<ArtifactUploadResponse> {
@@ -236,10 +257,12 @@ async fn receive_and_store(
     let max_size = params.max_size;
     let now = Utc::now();
 
-    // The temporary key is server-generated from a random UUID.
+    // The temporary key is server-generated from the upload
+    // row's ID, so the row names its temp object for the
+    // garbage collector (see `crate::storage::artifact_upload_key`).
     // The final key is server-generated from the content digest.
     // User input is never part of either.
-    let temp_key = format!("artifact-upload/{}", Uuid::new_v4());
+    let temp_key = artifact_upload_key(upload_id);
 
     let received = Arc::new(AtomicU64::new(0));
     let exceeded = Arc::new(AtomicBool::new(false));
@@ -459,6 +482,294 @@ async fn set_upload_state(
     Ok(())
 }
 
+/// Deletes one artifact.
+///
+/// `DELETE /_api/v1/artifacts/:cache/:name/:version/:file` —
+/// the identifiers ride in the path, exactly as they do on the
+/// download route and on `/_api/v1/cache-config/:cache`. The
+/// upload endpoint's header-metadata convention exists because
+/// there the request body is the artifact bytes; a delete has
+/// no body to protect, so it needs no header.
+///
+/// Authorization reuses the binary cache's machinery unchanged:
+/// the caller's JWT must grant the `delete` permission on the
+/// cache, the permission the token model defines for removing
+/// objects. A `push` token alone cannot delete.
+#[instrument(skip_all, fields(cache_name, name, version, filename))]
+pub(crate) async fn delete_artifact(
+    Extension(state): Extension<State>,
+    Extension(req_state): Extension<RequestState>,
+    Path((cache_name, name, version, filename)): Path<(CacheName, String, String, String)>,
+) -> ServerResult<()> {
+    let database = state.database().await?;
+    let storage = state.storage().await?;
+
+    delete_artifact_inner(
+        database,
+        storage.as_ref().as_ref(),
+        &req_state.auth,
+        &cache_name,
+        &name,
+        &version,
+        &filename,
+    )
+    .await
+}
+
+/// The delete itself, split from the HTTP plumbing so tests can
+/// drive it against a migrated database and a local backend.
+///
+/// Order of operations is contractual:
+///
+/// 1. The addressing tokens are validated with the upload
+///    endpoint's discipline, before anything is read or
+///    written. The address names one literal version — the
+///    `latest` alias is never resolved here, so a delete always
+///    names exactly the artifact its caller named.
+/// 2. Authorization runs through the cache's `delete`
+///    permission. Nothing is looked up before this succeeds.
+/// 3. The artifact row, the `latest` pointer, and the digest
+///    reference count are settled in one transaction (see
+///    [`settle_latest_pointer`]).
+/// 4. The stored object is deleted after the commit, and only
+///    when no remaining artifact in the cache references the
+///    same digest: identical content under another name or
+///    version shares the one object and keeps it.
+pub(crate) async fn delete_artifact_inner(
+    database: &DatabaseConnection,
+    storage: &dyn StorageBackend,
+    auth: &AuthState,
+    cache_name: &CacheName,
+    name: &str,
+    version: &str,
+    filename: &str,
+) -> ServerResult<()> {
+    validate_artifact_tokens(name, version, filename)?;
+
+    let cache = auth
+        .auth_cache(database, cache_name, |cache, permission| {
+            permission.require_delete()?;
+            Ok(cache)
+        })
+        .await?;
+
+    let txn = database
+        .begin()
+        .await
+        .map_err(ServerError::database_error)?;
+
+    let artifact = Artifact::find()
+        .filter(artifact::Column::CacheId.eq(cache.id))
+        .filter(artifact::Column::Name.eq(name))
+        .filter(artifact::Column::Version.eq(version))
+        .filter(artifact::Column::Filename.eq(filename))
+        .one(&txn)
+        .await
+        .map_err(ServerError::database_error)?
+        .ok_or_else(|| ServerError::from(ErrorKind::NotFound))?;
+
+    // Computed before any mutation: a stored digest that is
+    // not 32 bytes is corruption, and the delete must fail
+    // without side effects rather than after them.
+    let digest: [u8; 32] = artifact
+        .sha256
+        .as_slice()
+        .try_into()
+        .map_err(|_| ServerError::from(ErrorKind::InternalServerError))?;
+    let object_key = artifact_key(cache.id, &digest);
+
+    settle_latest_pointer(&txn, cache.id, &artifact).await?;
+
+    // The object is deleted only when this row was the digest's
+    // last reference in the cache.
+    let remaining_references = Artifact::find()
+        .filter(artifact::Column::CacheId.eq(cache.id))
+        .filter(artifact::Column::Sha256.eq(artifact.sha256.clone()))
+        .filter(artifact::Column::Id.ne(artifact.id))
+        .count(&txn)
+        .await
+        .map_err(ServerError::database_error)?;
+
+    Artifact::delete_by_id(artifact.id)
+        .exec(&txn)
+        .await
+        .map_err(ServerError::database_error)?;
+
+    txn.commit().await.map_err(ServerError::database_error)?;
+
+    if remaining_references == 0 {
+        // The row is gone; the delete has happened. A failed
+        // object removal leaves an orphan that a later upload
+        // of the same content re-adopts (the upload path
+        // probes for the object before placing its own), so it
+        // is logged rather than surfaced as a failed delete.
+        if let Err(e) = delete_file_if_present(storage, &object_key).await {
+            tracing::warn!(
+                "Failed to delete the object of deleted artifact {} {} ({}): {}",
+                name,
+                version,
+                filename,
+                e
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Moves the `latest` pointer off an artifact that is about to
+/// be deleted, inside the caller's transaction.
+///
+/// The pointer names the most recently recorded artifact of
+/// its name; deleting that artifact unwinds the pointer to
+/// the most recently recorded remaining one, and removes the
+/// pointer when the deleted artifact was the only one — the
+/// pointer must never dangle onto a deleted row.
+async fn settle_latest_pointer(
+    txn: &sea_orm::DatabaseTransaction,
+    cache_id: i64,
+    artifact: &artifact::Model,
+) -> ServerResult<()> {
+    let pointer = ArtifactLatest::find()
+        .filter(artifact_latest::Column::CacheId.eq(cache_id))
+        .filter(artifact_latest::Column::Name.eq(artifact.name.as_str()))
+        .one(txn)
+        .await
+        .map_err(ServerError::database_error)?;
+
+    let Some(pointer) = pointer else {
+        return Ok(());
+    };
+
+    if pointer.latest_artifact_id != artifact.id {
+        return Ok(());
+    }
+
+    let successor = Artifact::find()
+        .filter(artifact::Column::CacheId.eq(cache_id))
+        .filter(artifact::Column::Name.eq(artifact.name.as_str()))
+        .filter(artifact::Column::Id.ne(artifact.id))
+        .order_by_desc(artifact::Column::Id)
+        .one(txn)
+        .await
+        .map_err(ServerError::database_error)?;
+
+    match successor {
+        Some(successor) => {
+            ArtifactLatest::update(artifact_latest::ActiveModel {
+                cache_id: Set(cache_id),
+                name: Set(artifact.name.clone()),
+                latest_artifact_id: Set(successor.id),
+            })
+            .exec(txn)
+            .await
+            .map_err(ServerError::database_error)?;
+        }
+        None => {
+            ArtifactLatest::delete_many()
+                .filter(artifact_latest::Column::CacheId.eq(cache_id))
+                .filter(artifact_latest::Column::Name.eq(artifact.name.as_str()))
+                .exec(txn)
+                .await
+                .map_err(ServerError::database_error)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Deletes every storage object belonging to a cache's
+/// artifacts: the final object of each distinct digest it
+/// holds, and the temp object of each of its upload rows.
+///
+/// This is the storage half of destroying a cache. The rows
+/// are removed by the cache's foreign-key cascades; storage
+/// objects are not rows, so nothing else ever reaps them —
+/// garbage collection is blind to artifacts by design.
+///
+/// Best-effort per object, like the rest of the server's
+/// storage cleanup: a failed removal is logged and counted,
+/// never silently dropped, and the rows are deleted by the
+/// caller regardless. An object that outlives its rows is an
+/// invisible orphan, while rows that outlive their objects
+/// would fail loudly on every download.
+pub(crate) async fn reap_cache_artifact_objects(
+    database: &DatabaseConnection,
+    storage: &dyn StorageBackend,
+    cache_id: i64,
+) -> ServerResult<()> {
+    let artifacts = Artifact::find()
+        .filter(artifact::Column::CacheId.eq(cache_id))
+        .all(database)
+        .await
+        .map_err(ServerError::database_error)?;
+
+    // Distinct digests, sorted so the reap order is
+    // deterministic. A digest shared by several artifacts in
+    // the cache is a single object.
+    let mut digests: Vec<Vec<u8>> = artifacts.iter().map(|a| a.sha256.clone()).collect();
+    digests.sort();
+    digests.dedup();
+
+    let uploads = ArtifactUpload::find()
+        .filter(artifact_upload::Column::CacheId.eq(cache_id))
+        .all(database)
+        .await
+        .map_err(ServerError::database_error)?;
+
+    let mut objects_deleted = 0usize;
+    let mut objects_failed = 0usize;
+
+    for digest in &digests {
+        let digest: [u8; 32] = match digest.as_slice().try_into() {
+            Ok(digest) => digest,
+            Err(_) => {
+                // A stored digest that is not 32 bytes names
+                // no object this function can address.
+                objects_failed += 1;
+                continue;
+            }
+        };
+
+        match delete_file_if_present(storage, &artifact_key(cache_id, &digest)).await {
+            Ok(true) => objects_deleted += 1,
+            Ok(false) => {}
+            Err(e) => {
+                objects_failed += 1;
+                tracing::warn!(
+                    "Failed to delete an artifact object of cache {}: {}",
+                    cache_id,
+                    e
+                );
+            }
+        }
+    }
+
+    for upload in &uploads {
+        match delete_file_if_present(storage, &artifact_upload_key(upload.id)).await {
+            Ok(true) => objects_deleted += 1,
+            Ok(false) => {}
+            Err(e) => {
+                objects_failed += 1;
+                tracing::warn!(
+                    "Failed to delete the temp object of upload {}: {}",
+                    upload.id,
+                    e
+                );
+            }
+        }
+    }
+
+    tracing::info!(
+        "Reaped {} artifact objects of cache {} ({} failed)",
+        objects_deleted,
+        cache_id,
+        objects_failed
+    );
+
+    Ok(())
+}
+
 /// Builds the response from the recorded artifact.
 fn response_from(
     request: &ArtifactUploadRequest,
@@ -510,7 +821,21 @@ fn artifact_content_type(filename: &str) -> &'static str {
 /// and whitespace from every field. The filename additionally
 /// may not contain `..`.
 fn validate_upload_request(request: &ArtifactUploadRequest) -> ServerResult<()> {
-    validate_artifact_tokens(&request.name, &request.version, &request.filename)
+    validate_artifact_tokens(&request.name, &request.version, &request.filename)?;
+
+    // `latest` is the alias the download side resolves through
+    // the pointer; a stored artifact may never carry it as its
+    // version, or the literal version and the alias would name
+    // different bytes behind one URL segment.
+    if request.version == RESERVED_VERSION_LATEST {
+        return Err(ErrorKind::RequestError(anyhow!(
+            "Invalid artifact version {:?}: this version is reserved for the latest alias",
+            request.version
+        ))
+        .into());
+    }
+
+    Ok(())
 }
 
 /// Validates the `(name, version, filename)` tokens that address
@@ -764,6 +1089,59 @@ mod tests {
 
     fn push_auth() -> AuthState {
         auth_with(true, false)
+    }
+
+    /// An auth state whose token may push and delete on the
+    /// test cache, so a test can set up artifacts and remove
+    /// them with one identity.
+    fn delete_auth() -> AuthState {
+        let mut token = Token::new(
+            "artifact-tester".to_owned(),
+            &(Utc::now() + Duration::days(1)),
+        );
+        let cache = CacheName::new(CACHE_NAME.to_owned()).unwrap();
+        let permission = token.get_or_insert_permission_mut(cache.to_pattern());
+        permission.push = true;
+        permission.delete = true;
+
+        let auth = AuthState::new();
+        auth.token.set(token).unwrap();
+        auth
+    }
+
+    async fn delete(
+        rig: &Rig,
+        auth: &AuthState,
+        name: &str,
+        version: &str,
+        filename: &str,
+    ) -> ServerResult<()> {
+        delete_artifact_inner(
+            &rig.db,
+            &rig.storage,
+            auth,
+            &CacheName::new(CACHE_NAME.to_owned()).unwrap(),
+            name,
+            version,
+            filename,
+        )
+        .await
+    }
+
+    /// The artifact ID the `latest` pointer currently names
+    /// for a name, or `None` when there is no pointer.
+    async fn latest_pointer(rig: &Rig, name: &str) -> Option<i64> {
+        rig.db
+            .find_artifact_latest(rig.cache_id, name)
+            .await
+            .unwrap()
+            .map(|artifact| artifact.id)
+    }
+
+    fn error_status(result: ServerResult<()>) -> axum::http::StatusCode {
+        use axum::response::IntoResponse;
+
+        result.unwrap_err().into_response().status()
     }
 
     async fn upload(
@@ -1210,6 +1588,342 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(latest.id, rows[0].id);
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    // -- Reserved version (M4) ----------------------------------
+
+    #[tokio::test]
+    async fn latest_version_upload_is_rejected() {
+        let rig = rig("latest-reserved").await;
+
+        // `latest` is the download alias, never a version: an
+        // upload naming it would shadow the pointer.
+        let result = upload(
+            &rig,
+            &push_auth(),
+            &request("widget", "latest", "widget_latest_linux-x86_64.tar.gz"),
+            Body::from(BODY),
+        )
+        .await;
+        assert!(result.is_err());
+
+        // Validation precedes the upload row: nothing recorded,
+        // nothing stored.
+        assert_eq!(artifact_rows(&rig).await.len(), 0);
+        assert_eq!(upload_rows(&rig).await.len(), 0);
+        assert_eq!(stored_object_count(&rig.root), 0);
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    // -- Delete (M4) --------------------------------------------
+
+    #[tokio::test]
+    async fn delete_removes_row_object_and_pointer() {
+        let rig = rig("delete-happy").await;
+        upload(&rig, &push_auth(), &default_request(), Body::from(BODY))
+            .await
+            .unwrap();
+
+        delete(
+            &rig,
+            &delete_auth(),
+            "widget",
+            "1.0.0",
+            "widget_1.0.0_linux-x86_64.tar.gz",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(artifact_rows(&rig).await.len(), 0);
+        assert_eq!(stored_object_count(&rig.root), 0);
+        assert_eq!(latest_pointer(&rig, "widget").await, None);
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn delete_with_shared_digest_keeps_the_object() {
+        let rig = rig("delete-shared").await;
+
+        // Identical bytes under two names share one object.
+        upload(&rig, &push_auth(), &default_request(), Body::from(BODY))
+            .await
+            .unwrap();
+        upload(
+            &rig,
+            &push_auth(),
+            &request("gadget", "1.0.0", "gadget_1.0.0_linux-x86_64.tar.gz"),
+            Body::from(BODY),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stored_object_count(&rig.root), 1);
+
+        delete(
+            &rig,
+            &delete_auth(),
+            "widget",
+            "1.0.0",
+            "widget_1.0.0_linux-x86_64.tar.gz",
+        )
+        .await
+        .unwrap();
+
+        // The surviving artifact keeps its row, its pointer and
+        // the shared object, byte for byte.
+        let rows = artifact_rows(&rig).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "gadget");
+        assert_eq!(latest_pointer(&rig, "gadget").await, Some(rows[0].id));
+        assert_eq!(stored_object_count(&rig.root), 1);
+
+        let digest: [u8; 32] = Sha256::digest(BODY).into();
+        let bytes = rig
+            .storage
+            .get_range(artifact_key(rig.cache_id, &digest), 0, BODY.len() as u64)
+            .await
+            .unwrap();
+        assert_eq!(&bytes[..], BODY);
+
+        // Deleting the last reference removes the object.
+        delete(
+            &rig,
+            &delete_auth(),
+            "gadget",
+            "1.0.0",
+            "gadget_1.0.0_linux-x86_64.tar.gz",
+        )
+        .await
+        .unwrap();
+        assert_eq!(artifact_rows(&rig).await.len(), 0);
+        assert_eq!(stored_object_count(&rig.root), 0);
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn delete_unwinds_latest_pointer_in_upload_order() {
+        const BODY_V3: &[u8] = b"widget release bytes, version three";
+
+        let rig = rig("delete-repoint").await;
+        let auth = push_auth();
+
+        upload(&rig, &auth, &default_request(), Body::from(BODY))
+            .await
+            .unwrap();
+        upload(
+            &rig,
+            &auth,
+            &request("widget", "2.0.0", "widget_2.0.0_linux-x86_64.tar.gz"),
+            Body::from(BODY_V2),
+        )
+        .await
+        .unwrap();
+        upload(
+            &rig,
+            &auth,
+            &request("widget", "3.0.0", "widget_3.0.0_linux-x86_64.tar.gz"),
+            Body::from(BODY_V3),
+        )
+        .await
+        .unwrap();
+
+        let rows = artifact_rows(&rig).await;
+        let id_of = |version: &str| rows.iter().find(|r| r.version == version).unwrap().id;
+        assert_eq!(latest_pointer(&rig, "widget").await, Some(id_of("3.0.0")));
+
+        // Deleting a version the pointer does not name leaves
+        // the pointer alone.
+        delete(
+            &rig,
+            &delete_auth(),
+            "widget",
+            "2.0.0",
+            "widget_2.0.0_linux-x86_64.tar.gz",
+        )
+        .await
+        .unwrap();
+        assert_eq!(latest_pointer(&rig, "widget").await, Some(id_of("3.0.0")));
+
+        // Deleting the pointed version unwinds the pointer to
+        // the newest remaining one — not the deleted 2.0.0, and
+        // not nowhere.
+        delete(
+            &rig,
+            &delete_auth(),
+            "widget",
+            "3.0.0",
+            "widget_3.0.0_linux-x86_64.tar.gz",
+        )
+        .await
+        .unwrap();
+        assert_eq!(latest_pointer(&rig, "widget").await, Some(id_of("1.0.0")));
+
+        // Deleting the last version removes the pointer.
+        delete(
+            &rig,
+            &delete_auth(),
+            "widget",
+            "1.0.0",
+            "widget_1.0.0_linux-x86_64.tar.gz",
+        )
+        .await
+        .unwrap();
+        assert_eq!(latest_pointer(&rig, "widget").await, None);
+        assert_eq!(artifact_rows(&rig).await.len(), 0);
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn delete_of_nonexistent_artifact_is_not_found() {
+        let rig = rig("delete-missing").await;
+        upload(&rig, &push_auth(), &default_request(), Body::from(BODY))
+            .await
+            .unwrap();
+
+        // Adversarial: a well-formed address for an artifact
+        // that was never uploaded.
+        let result = delete(
+            &rig,
+            &delete_auth(),
+            "widget",
+            "9.9.9",
+            "widget_9.9.9_linux-x86_64.tar.gz",
+        )
+        .await;
+        assert_eq!(error_status(result), axum::http::StatusCode::NOT_FOUND);
+
+        // No partial effects: the real artifact is untouched.
+        assert_eq!(artifact_rows(&rig).await.len(), 1);
+        assert_eq!(stored_object_count(&rig.root), 1);
+        assert!(latest_pointer(&rig, "widget").await.is_some());
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn delete_denied_without_token_or_delete_permission() {
+        let rig = rig("delete-auth").await;
+        upload(&rig, &push_auth(), &default_request(), Body::from(BODY))
+            .await
+            .unwrap();
+
+        // Adversarial: no token at all.
+        let result = delete(
+            &rig,
+            &AuthState::new(),
+            "widget",
+            "1.0.0",
+            "widget_1.0.0_linux-x86_64.tar.gz",
+        )
+        .await;
+        assert!(result.is_err());
+
+        // Adversarial: a push token — enough to upload, never
+        // enough to delete.
+        let result = delete(
+            &rig,
+            &push_auth(),
+            "widget",
+            "1.0.0",
+            "widget_1.0.0_linux-x86_64.tar.gz",
+        )
+        .await;
+        assert!(result.is_err());
+
+        assert_eq!(artifact_rows(&rig).await.len(), 1);
+        assert_eq!(stored_object_count(&rig.root), 1);
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_invalid_tokens() {
+        let rig = rig("delete-invalid").await;
+        upload(&rig, &push_auth(), &default_request(), Body::from(BODY))
+            .await
+            .unwrap();
+
+        // Adversarial: traversal in the addressed filename is
+        // rejected by the same validation as uploads, before
+        // anything is looked up.
+        let result = delete(
+            &rig,
+            &delete_auth(),
+            "widget",
+            "1.0.0",
+            "../widget_1.0.0_linux-x86_64.tar.gz",
+        )
+        .await;
+        assert!(result.is_err());
+
+        assert_eq!(artifact_rows(&rig).await.len(), 1);
+        assert_eq!(stored_object_count(&rig.root), 1);
+
+        tokio::fs::remove_dir_all(&rig.root).await.ok();
+    }
+
+    // -- Cache object reap (M4) ---------------------------------
+
+    #[tokio::test]
+    async fn reap_cache_objects_removes_final_and_temp_objects() {
+        let rig = rig("reap-cache").await;
+        let auth = push_auth();
+
+        upload(&rig, &auth, &default_request(), Body::from(BODY))
+            .await
+            .unwrap();
+        upload(
+            &rig,
+            &auth,
+            &request("gadget", "1.0.0", "gadget_1.0.0_linux-x86_64.tar.gz"),
+            Body::from(BODY_V2),
+        )
+        .await
+        .unwrap();
+
+        // An in-flight upload: a row, and its temp object at
+        // the row-derived key.
+        let now = Utc::now();
+        let upload_row = artifact_upload::ActiveModel {
+            cache_id: Set(rig.cache_id),
+            name: Set("widget".to_owned()),
+            version: Set("2.0.0".to_owned()),
+            filename: Set("widget_2.0.0_linux-x86_64.tar.gz".to_owned()),
+            expected_sha256: Set(None),
+            expected_size: Set(None),
+            state: Set(UPLOAD_STATE_RECEIVING.to_owned()),
+            created_at: Set(now),
+            expires_at: Set(now + Duration::hours(1)),
+            ..Default::default()
+        }
+        .insert(&rig.db)
+        .await
+        .unwrap();
+
+        let mut temp_bytes: &[u8] = b"partial bytes";
+        rig.storage
+            .upload_file(artifact_upload_key(upload_row.id), &mut temp_bytes)
+            .await
+            .unwrap();
+        assert_eq!(stored_object_count(&rig.root), 3);
+
+        reap_cache_artifact_objects(&rig.db, &rig.storage, rig.cache_id)
+            .await
+            .unwrap();
+
+        // Every object of the cache is gone: both final objects
+        // and the in-flight temp object.
+        assert_eq!(stored_object_count(&rig.root), 0);
+
+        // The reap is the storage half only: the rows are the
+        // foreign-key cascades' business, and they remain.
+        assert_eq!(artifact_rows(&rig).await.len(), 2);
+        assert_eq!(upload_rows(&rig).await.len(), 3);
 
         tokio::fs::remove_dir_all(&rig.root).await.ok();
     }
