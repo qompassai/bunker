@@ -14,6 +14,7 @@ mod m20230112_000003_add_nar_num_chunks;
 mod m20230112_000004_migrate_nar_remote_files_to_chunks;
 mod m20230112_000005_drop_old_nar_columns;
 mod m20230112_000006_add_nar_completeness_hint;
+mod m20261013_000001_create_artifact_tables;
 
 pub struct Migrator;
 
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20230112_000004_migrate_nar_remote_files_to_chunks::Migration),
             Box::new(m20230112_000005_drop_old_nar_columns::Migration),
             Box::new(m20230112_000006_add_nar_completeness_hint::Migration),
+            Box::new(m20261013_000001_create_artifact_tables::Migration),
         ]
     }
 }

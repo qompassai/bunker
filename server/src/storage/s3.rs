@@ -12,7 +12,7 @@ use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart},
     Client,
 };
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncRead;
@@ -363,6 +363,48 @@ impl StorageBackend for S3Backend {
         let req = client.get_object().bucket(&file.bucket).key(&file.key);
 
         self.get_download(req, prefer_stream).await
+    }
+
+    async fn get_range(&self, name: String, offset: u64, len: u64) -> ServerResult<Bytes> {
+        // A zero-length read is empty at any offset; S3 would
+        // reject the corresponding range as unsatisfiable, so
+        // don't issue a request for it.
+        if len == 0 {
+            return Ok(Bytes::new());
+        }
+
+        // `len >= 1` here, so `len - 1` cannot underflow; the
+        // addition itself is checked because both inputs are
+        // caller-supplied.
+        let end = offset.checked_add(len - 1).ok_or_else(|| {
+            ErrorKind::StorageError(anyhow::anyhow!(
+                "Range offset {} + length {} overflows",
+                offset,
+                len
+            ))
+        })?;
+
+        // S3 answers a range starting past the end of the object
+        // with an error, which surfaces here as a storage error —
+        // the same contract the local backend enforces explicitly.
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.config.bucket)
+            .key(&name)
+            .range(format!("bytes={}-{}", offset, end))
+            .send()
+            .await
+            .map_err(ServerError::storage_error)?;
+
+        let bytes = output
+            .body
+            .collect()
+            .await
+            .map_err(ServerError::storage_error)?
+            .into_bytes();
+
+        Ok(bytes)
     }
 
     async fn make_db_reference(&self, name: String) -> ServerResult<RemoteFile> {

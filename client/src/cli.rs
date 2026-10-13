@@ -7,6 +7,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use enum_as_inner::EnumAsInner;
 
+use crate::command::artifact::{self, Artifact};
 use crate::command::cache::{self, Cache};
 use crate::command::get_closure::{self, GetClosure};
 use crate::command::login::{self, Login};
@@ -25,6 +26,7 @@ pub struct Opts {
 
 #[derive(Debug, Subcommand, EnumAsInner)]
 pub enum Command {
+    Artifact(Artifact),
     Login(Login),
     Use(Use),
     Push(Push),
@@ -51,6 +53,7 @@ pub async fn run() -> Result<()> {
     let opts = Opts::parse();
 
     match opts.command {
+        Command::Artifact(_) => artifact::run(opts).await,
         Command::Login(_) => login::run(opts).await,
         Command::Use(_) => r#use::run(opts).await,
         Command::Push(_) => push::run(opts).await,

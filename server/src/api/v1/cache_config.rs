@@ -1,5 +1,6 @@
 //! Cache configuration endpoint.
 
+use crate::api::v1::artifacts::reap_cache_artifact_objects;
 use crate::database::entity::cache::{self, Entity as Cache};
 use crate::database::entity::Json as DbJson;
 use crate::error::{ErrorKind, ServerError, ServerResult};
@@ -158,6 +159,24 @@ pub(crate) async fn destroy_cache(
             Ok(())
         }
     } else {
+        // Hard destruction removes the cache's rows — the
+        // artifact rows follow by foreign-key cascade — but
+        // storage objects are not rows, and garbage collection
+        // never sees artifacts. Reap the objects first, while
+        // the rows that name them still exist; the reap is
+        // best-effort per object (failures are logged there),
+        // because the reverse order would orphan every object
+        // whose row vanished first.
+        //
+        // An already soft-deleted cache keeps the existing
+        // behavior exactly — the deletion below reports
+        // NoSuchCache for it — so its objects are reaped only
+        // when this delete will actually remove the rows.
+        if cache.deleted_at.is_none() {
+            let storage = state.storage().await?;
+            reap_cache_artifact_objects(database, storage.as_ref().as_ref(), cache.id).await?;
+        }
+
         let deletion = Cache::delete_many()
             .filter(cache::Column::Id.eq(cache.id))
             .filter(cache::Column::DeletedAt.is_null())

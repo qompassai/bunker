@@ -118,7 +118,11 @@ pub struct NarInfo {
     /// Part of the fingerprint.
     ///
     /// Example element: `j5p0j1w27aqdzncpw73k95byvhh5prw2-glibc-2.33-47`
+    ///
+    /// The `References` line may be absent from a manifest; like
+    /// Nix's own parser, an absent line means an empty list.
     #[serde(rename = "References")]
+    #[serde(default)]
     #[serde_as(as = "SpaceDelimitedList")]
     pub references: Vec<String>,
 

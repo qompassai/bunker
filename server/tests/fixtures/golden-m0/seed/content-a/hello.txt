@@ -1,0 +1,2 @@
+Golden M0 fixture path A: a small store path whose NAR stays below
+the 64 KiB chunking threshold and is stored as a single chunk.

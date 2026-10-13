@@ -47,6 +47,23 @@ impl<'de> Deserializer<'de> {
         Ok(())
     }
 
+    /// Skips spaces and tabs on the current line only.
+    ///
+    /// A value is the rest of its own line, so skipping whitespace
+    /// before a value must not cross a line boundary: an empty value
+    /// would otherwise absorb the next line's key and value.
+    fn consume_inline_whitespace(&mut self) -> Result<()> {
+        match self.input.find(|c| !matches!(c, ' ' | '\t')) {
+            Some(idx) => {
+                self.input = &self.input[idx..];
+            }
+            None => {
+                self.input = &self.input[..0];
+            }
+        }
+        Ok(())
+    }
+
     fn peek_until_eol(&mut self) -> Result<&'de str> {
         match self.input.find(['\r', '\n']) {
             Some(idx) => Ok(&self.input[..idx]),
@@ -176,7 +193,7 @@ impl<'de> MapAccess<'de> for Deserializer<'de> {
             return Err(Error::ExpectedColon);
         }
 
-        self.consume_whitespace()?;
+        self.consume_inline_whitespace()?;
 
         seed.deserialize(&mut ValueDeserializer(self))
     }

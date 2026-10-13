@@ -133,6 +133,17 @@ interval = "12 hours"
 # disabled by default. You can enable it on a per-cache basis.
 #default-retention-period = "6 months"
 
+# Artifact serving
+#
+# Artifacts are release binaries stored next to the Nix binary
+# cache data and served outside the Nix protocol.
+[artifacts]
+# The maximum size of a single artifact upload, in bytes.
+#
+# Uploads larger than this are rejected while they stream.
+# By default it's 1 GiB.
+#max-size = 1073741824
+
 [jwt]
 # WARNING: Changing _anything_ in this section will break any existing
 # tokens. If you need to regenerate them, ensure that you use the the
