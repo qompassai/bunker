@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::error::BunkerError;
+#[cfg(feature = "nix_store")]
 use crate::nix_store::tests::test_nar;
 const BLOB: &[u8] = include_bytes!("blob");
 #[test]
@@ -13,6 +14,9 @@ fn test_basic() {
     let expected_base32 = "sha256:0c2kab5ailaapzl62sd9c8pd5d6mf6lf0md1kkdhc5a8y7m08d6z";
     assert_eq!(expected_base32, hash.to_typed_base32());
 }
+// The NAR fixture lives in the `nix_store` tests, which only exist
+// when the FFI bindings are compiled in.
+#[cfg(feature = "nix_store")]
 #[test]
 fn test_nar_hash() {
     let nar = test_nar::NO_DEPS;

@@ -5,9 +5,12 @@
 //! experience (e.g., `bunker login`).
 
 use std::collections::HashMap;
-use std::fs::{self, read_to_string, OpenOptions, Permissions};
+#[cfg(unix)]
+use std::fs::Permissions;
+use std::fs::{self, read_to_string, OpenOptions};
 use std::io::Write;
 use std::ops::{Deref, DerefMut};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
@@ -23,6 +26,7 @@ use crate::cache::{CacheName, CacheRef, ServerName};
 const XDG_PREFIX: &str = "bunker";
 
 /// The permission the configuration file should have.
+#[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
 
 /// Configuration loader.
@@ -117,17 +121,19 @@ impl Config {
 
             // This isn't atomic, so some other process might chmod it
             // to something else before we write. We don't handle this case.
+            // The 0600 mode is Unix-only; other platforms rely on the
+            // per-user profile directory being private.
+            #[cfg(unix)]
             if path.exists() {
                 let permissions = Permissions::from_mode(FILE_MODE);
                 fs::set_permissions(path, permissions)?;
             }
 
-            let mut file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .mode(FILE_MODE)
-                .open(path)?;
+            let mut options = OpenOptions::new();
+            options.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            options.mode(FILE_MODE);
+            let mut file = options.open(path)?;
 
             file.write_all(serialized.as_bytes())?;
 

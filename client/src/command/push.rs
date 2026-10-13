@@ -1,17 +1,29 @@
+#[cfg(feature = "nix")]
 use std::io::IsTerminal;
 use std::path::PathBuf;
+#[cfg(feature = "nix")]
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+#[cfg(feature = "nix")]
+use anyhow::anyhow;
+use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "nix")]
 use indicatif::MultiProgress;
+#[cfg(feature = "nix")]
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 
+#[cfg(feature = "nix")]
 use crate::api::ApiClient;
-use crate::cache::{CacheName, CacheRef, ServerName};
+use crate::cache::CacheRef;
+#[cfg(feature = "nix")]
+use crate::cache::{CacheName, ServerName};
 use crate::cli::Opts;
+#[cfg(feature = "nix")]
 use crate::config::Config;
+#[cfg(feature = "nix")]
 use crate::push::{PushConfig, PushSessionConfig, Pusher};
+#[cfg(feature = "nix")]
 use bunker::nix_store::NixStore;
 
 /// Push closures to a binary cache.
@@ -47,6 +59,7 @@ pub struct Push {
     force_preamble: bool,
 }
 
+#[cfg(feature = "nix")]
 struct PushContext {
     store: Arc<NixStore>,
     cache_name: CacheName,
@@ -56,6 +69,7 @@ struct PushContext {
     ignore_upstream_cache_filter: bool,
 }
 
+#[cfg(feature = "nix")]
 impl PushContext {
     async fn push_static(self, paths: Vec<PathBuf>) -> Result<()> {
         if paths.is_empty() {
@@ -134,6 +148,7 @@ impl PushContext {
     }
 }
 
+#[cfg(feature = "nix")]
 pub async fn run(opts: Opts) -> Result<()> {
     let sub = opts.command.as_push().unwrap();
     if sub.jobs == 0 {
@@ -194,4 +209,9 @@ pub async fn run(opts: Opts) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "nix"))]
+pub async fn run(_opts: Opts) -> Result<()> {
+    Err(super::nix_store_not_compiled("push"))
 }

@@ -1,17 +1,28 @@
+#[cfg(feature = "nix")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "nix")]
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+#[cfg(feature = "nix")]
+use anyhow::anyhow;
+use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "nix")]
 use indicatif::MultiProgress;
+#[cfg(feature = "nix")]
 use notify::{EventKind, RecursiveMode, Watcher};
+#[cfg(feature = "nix")]
 use tokio::sync::mpsc;
 
+#[cfg(feature = "nix")]
 use crate::api::ApiClient;
 use crate::cache::CacheRef;
 use crate::cli::Opts;
+#[cfg(feature = "nix")]
 use crate::config::Config;
+#[cfg(feature = "nix")]
 use crate::push::{PushConfig, PushSessionConfig, Pusher};
+#[cfg(feature = "nix")]
 use bunker::nix_store::{NixStore, StorePath};
 
 /// Watch the Nix Store for new paths and upload them to a binary cache.
@@ -40,6 +51,7 @@ pub struct WatchStore {
     force_preamble: bool,
 }
 
+#[cfg(feature = "nix")]
 pub async fn run(opts: Opts) -> Result<()> {
     let sub = opts.command.as_watch_store().unwrap();
     if sub.jobs == 0 {
@@ -124,9 +136,15 @@ pub async fn run(opts: Opts) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "nix")]
 fn strip_lock_file(p: &Path) -> Option<PathBuf> {
     p.to_str()
         .and_then(|p| p.strip_suffix(".lock"))
         .filter(|t| !t.ends_with(".drv") && !t.ends_with("-source"))
         .map(PathBuf::from)
+}
+
+#[cfg(not(feature = "nix"))]
+pub async fn run(_opts: Opts) -> Result<()> {
+    Err(super::nix_store_not_compiled("watch-store"))
 }

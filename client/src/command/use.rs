@@ -1,12 +1,19 @@
-use anyhow::{anyhow, Result};
+#[cfg(feature = "nix")]
+use anyhow::anyhow;
+use anyhow::Result;
 use clap::Parser;
+#[cfg(feature = "nix")]
 use reqwest::Url;
 
+#[cfg(feature = "nix")]
 use crate::api::ApiClient;
 use crate::cache::CacheRef;
 use crate::cli::Opts;
+#[cfg(feature = "nix")]
 use crate::config::Config;
+#[cfg(feature = "nix")]
 use crate::nix_config::NixConfig;
+#[cfg(feature = "nix")]
 use crate::nix_netrc::NixNetrc;
 
 /// Configure Nix to use a binary cache.
@@ -19,6 +26,7 @@ pub struct Use {
     cache: CacheRef,
 }
 
+#[cfg(feature = "nix")]
 pub async fn run(opts: Opts) -> Result<()> {
     let sub = opts.command.as_use().unwrap();
     let config = Config::load()?;
@@ -68,4 +76,9 @@ pub async fn run(opts: Opts) -> Result<()> {
     nix_config.save().await?;
 
     Ok(())
+}
+
+#[cfg(not(feature = "nix"))]
+pub async fn run(_opts: Opts) -> Result<()> {
+    Err(super::nix_store_not_compiled("use"))
 }

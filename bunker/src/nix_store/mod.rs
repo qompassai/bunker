@@ -15,7 +15,9 @@ use std::ffi::OsStr;
 #[cfg(target_family = "unix")]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
+// The store tests drive a live `NixStore`, so they only exist when the
+// FFI bindings are compiled in.
+#[cfg(all(test, feature = "nix_store"))]
 pub mod tests;
 pub const STORE_PATH_HASH_LEN: usize = 32;
 pub const STORE_PATH_HASH_REGEX_FRAGMENT: &str = "[0123456789abcdfghijklmnpqrsvwxyz]{32}";

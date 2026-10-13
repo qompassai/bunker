@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::Opts;
+#[cfg(feature = "nix")]
 use bunker::nix_store::NixStore;
 
 /// Returns the closure of a store path (test).
@@ -18,6 +19,7 @@ pub struct GetClosure {
     include_outputs: bool,
 }
 
+#[cfg(feature = "nix")]
 pub async fn run(opts: Opts) -> Result<()> {
     let sub = opts.command.as_get_closure().unwrap();
 
@@ -32,4 +34,9 @@ pub async fn run(opts: Opts) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(not(feature = "nix"))]
+pub async fn run(_opts: Opts) -> Result<()> {
+    Err(super::nix_store_not_compiled("get-closure"))
 }

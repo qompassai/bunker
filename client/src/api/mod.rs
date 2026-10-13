@@ -6,10 +6,11 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use const_format::concatcp;
 use displaydoc::Display;
-use futures::{
-    future,
-    stream::{self, StreamExt, TryStream, TryStreamExt},
-};
+#[cfg(feature = "nix")]
+use futures::future;
+use futures::stream::{self, StreamExt};
+#[cfg(feature = "nix")]
+use futures::stream::{TryStream, TryStreamExt};
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},
     redirect::Policy,
@@ -25,16 +26,20 @@ use bunker::api::v1::artifacts::{
     BUNKER_ARTIFACT_SIZE,
 };
 use bunker::api::v1::cache_config::{CacheConfig, CreateCacheRequest};
+#[cfg(feature = "nix")]
 use bunker::api::v1::get_missing_paths::{GetMissingPathsRequest, GetMissingPathsResponse};
+#[cfg(feature = "nix")]
 use bunker::api::v1::upload_path::{
     UploadPathNarInfo, UploadPathResult, BUNKER_NAR_INFO, BUNKER_NAR_INFO_PREAMBLE_SIZE,
 };
 use bunker::cache::CacheName;
+#[cfg(feature = "nix")]
 use bunker::nix_store::StorePathHash;
 
 const BUNKER_USER_AGENT: &str =
     concatcp!("Bunker/{} ({})", env!("CARGO_PKG_NAME"), BUNKER_DISTRIBUTOR);
 
+#[cfg(feature = "nix")]
 const NAR_INFO_PREAMBLE_THRESHOLD: usize = 4 * 1024;
 
 #[derive(Debug, Clone)]
@@ -181,6 +186,7 @@ impl ApiClient {
             Err(api_error.into())
         }
     }
+    #[cfg(feature = "nix")]
     pub async fn get_missing_paths(
         &self,
         cache: &CacheName,
@@ -202,6 +208,7 @@ impl ApiClient {
             Err(api_error.into())
         }
     }
+    #[cfg(feature = "nix")]
     pub async fn upload_path<S>(
         &self,
         nar_info: UploadPathNarInfo,

@@ -19,8 +19,11 @@ mod cache;
 mod cli;
 mod command;
 mod config;
+#[cfg(feature = "nix")]
 mod nix_config;
+#[cfg(feature = "nix")]
 mod nix_netrc;
+#[cfg(feature = "nix")]
 mod push;
 mod version;
 
