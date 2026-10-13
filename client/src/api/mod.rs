@@ -13,8 +13,13 @@ use reqwest::{
     Body, Client as HttpClient, Response, StatusCode, Url,
 };
 use serde::Deserialize;
+use tokio::io::AsyncReadExt;
 use crate::config::ServerConfig;
 use crate::version::BUNKER_DISTRIBUTOR;
+use bunker::api::v1::artifacts::{
+    ArtifactUploadRequest, ArtifactUploadResponse, BUNKER_ARTIFACT_INFO, BUNKER_ARTIFACT_SHA256,
+    BUNKER_ARTIFACT_SIZE,
+};
 use bunker::api::v1::cache_config::{CacheConfig, CreateCacheRequest};
 use bunker::api::v1::get_missing_paths::{GetMissingPathsRequest, GetMissingPathsResponse};
 use bunker::api::v1::upload_path::{
@@ -179,6 +184,57 @@ impl ApiClient {
                 Ok(r) => Ok(Some(r)),
                 Err(_) => Ok(None),
             }
+        } else {
+            let api_error = ApiError::try_from_response(res).await?;
+            Err(api_error.into())
+        }
+    }
+
+    /// Uploads one artifact to a cache.
+    ///
+    /// The file is streamed to the server in bounded chunks; it
+    /// is never loaded into memory. `sha256` and `size` are the
+    /// digest and byte count the client computed for the file;
+    /// the server verifies what it receives against them and
+    /// rejects the upload on mismatch.
+    pub async fn upload_artifact(
+        &self,
+        request: &ArtifactUploadRequest,
+        sha256: &str,
+        size: u64,
+        file: tokio::fs::File,
+    ) -> Result<ArtifactUploadResponse> {
+        let endpoint = self.endpoint.join("_api/v1/artifacts")?;
+        let info_json = serde_json::to_string(request)?;
+
+        let stream = stream::try_unfold(file, |mut file| async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            let n = file.read(&mut buf).await?;
+            if n == 0 {
+                Ok::<Option<(Bytes, tokio::fs::File)>, std::io::Error>(None)
+            } else {
+                buf.truncate(n);
+                Ok(Some((Bytes::from(buf), file)))
+            }
+        });
+
+        let res = self
+            .client
+            .put(endpoint)
+            .header(USER_AGENT, HeaderValue::from_str(BUNKER_USER_AGENT)?)
+            .header(BUNKER_ARTIFACT_INFO, HeaderValue::from_str(&info_json)?)
+            .header(BUNKER_ARTIFACT_SHA256, HeaderValue::from_str(sha256)?)
+            .header(
+                BUNKER_ARTIFACT_SIZE,
+                HeaderValue::from_str(&size.to_string())?,
+            )
+            .body(Body::wrap_stream(stream))
+            .send()
+            .await?;
+
+        if res.status().is_success() {
+            let response = res.json().await?;
+            Ok(response)
         } else {
             let api_error = ApiError::try_from_response(res).await?;
             Err(api_error.into())
