@@ -1,14 +1,16 @@
 //! Local file storage.
 
 use std::ffi::OsStr;
+use std::io::SeekFrom;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use tokio::fs::{self, File};
-use tokio::io::{self, AsyncRead};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt};
 
 use super::{Download, RemoteFile, StorageBackend};
 use crate::error::{ErrorKind, ServerError, ServerResult};
@@ -214,6 +216,49 @@ impl StorageBackend for LocalBackend {
         Ok(Download::AsyncRead(Box::new(file)))
     }
 
+    async fn get_range(&self, name: String, offset: u64, len: u64) -> ServerResult<Bytes> {
+        // A zero-length read is empty at any offset; don't even
+        // touch the filesystem for it.
+        if len == 0 {
+            return Ok(Bytes::new());
+        }
+
+        let mut file = File::open(self.get_path(&name))
+            .await
+            .map_err(ServerError::storage_error)?;
+
+        let file_len = file
+            .metadata()
+            .await
+            .map_err(ServerError::storage_error)?
+            .len();
+
+        if offset > file_len {
+            return Err(ErrorKind::StorageError(anyhow::anyhow!(
+                "Range offset {} is past the end of the file ({} bytes)",
+                offset,
+                file_len
+            ))
+            .into());
+        }
+
+        file.seek(SeekFrom::Start(offset))
+            .await
+            .map_err(ServerError::storage_error)?;
+
+        // The buffer grows only with bytes actually read, never
+        // with the caller-supplied `len`, so a huge `len` cannot
+        // force a huge allocation. `take` clamps the read at the
+        // end of the file.
+        let mut buf = Vec::new();
+        file.take(len)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(ServerError::storage_error)?;
+
+        Ok(Bytes::from(buf))
+    }
+
     async fn make_db_reference(&self, name: String) -> ServerResult<RemoteFile> {
         Ok(RemoteFile::Local(LocalRemoteFile { name }))
     }
@@ -254,5 +299,150 @@ mod tests {
         let backend = test_backend();
         let path = backend.get_path("abcdef123456");
         assert_eq!(path, PathBuf::from("/tmp/test-storage/a/ab/abcdef123456"));
+    }
+
+    /// Creates a backend rooted at a fresh temporary directory and
+    /// uploads `data` under `name` through the real upload path.
+    async fn backend_with_file(name: &str, data: &[u8]) -> (LocalBackend, PathBuf) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        let root = std::env::temp_dir().join(format!(
+            "bunker-local-range-test-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let backend = LocalBackend {
+            config: LocalStorageConfig { path: root.clone() },
+        };
+
+        let mut stream: &[u8] = data;
+        backend
+            .upload_file(name.to_owned(), &mut stream)
+            .await
+            .unwrap();
+
+        (backend, root)
+    }
+
+    #[tokio::test]
+    async fn get_range_reads_exact_windows() {
+        let data = b"0123456789";
+        let (backend, root) = backend_with_file("rangefixture", data).await;
+
+        // Validation: windows from the start, middle and end return
+        // exactly the requested bytes.
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 0, 4)
+                .await
+                .unwrap(),
+            Bytes::from_static(b"0123")
+        );
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 2, 3)
+                .await
+                .unwrap(),
+            Bytes::from_static(b"234")
+        );
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 9, 1)
+                .await
+                .unwrap(),
+            Bytes::from_static(b"9")
+        );
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 0, 10)
+                .await
+                .unwrap(),
+            Bytes::from_static(b"0123456789")
+        );
+
+        fs::remove_dir_all(root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn get_range_clamps_len_past_end() {
+        let data = b"0123456789";
+        let (backend, root) = backend_with_file("rangefixture", data).await;
+
+        // Validation: a length running past the end of the file is
+        // clamped to the bytes that remain.
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 8, 100)
+                .await
+                .unwrap(),
+            Bytes::from_static(b"89")
+        );
+
+        // Adversarial: a huge length is clamped the same way and
+        // must not drive a huge allocation.
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 0, u64::MAX)
+                .await
+                .unwrap(),
+            Bytes::from_static(b"0123456789")
+        );
+
+        fs::remove_dir_all(root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn get_range_at_and_past_eof() {
+        let data = b"0123456789";
+        let (backend, root) = backend_with_file("rangefixture", data).await;
+
+        // Validation: an offset exactly at the end of the file is
+        // an empty read, and a zero length is empty at any offset.
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 10, 5)
+                .await
+                .unwrap(),
+            Bytes::new()
+        );
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 3, 0)
+                .await
+                .unwrap(),
+            Bytes::new()
+        );
+        assert_eq!(
+            backend
+                .get_range("rangefixture".to_owned(), 0, 0)
+                .await
+                .unwrap(),
+            Bytes::new()
+        );
+
+        // Adversarial: an offset past the end of the file is an
+        // error, including the largest representable offset.
+        assert!(backend
+            .get_range("rangefixture".to_owned(), 11, 5)
+            .await
+            .is_err());
+        assert!(backend
+            .get_range("rangefixture".to_owned(), u64::MAX, 5)
+            .await
+            .is_err());
+
+        fs::remove_dir_all(root).await.ok();
+    }
+
+    #[tokio::test]
+    async fn get_range_missing_file_is_an_error() {
+        // Adversarial: ranging over a file that does not exist is
+        // an error, not an empty read or a panic.
+        let backend = test_backend();
+        assert!(backend
+            .get_range("doesnotexist".to_owned(), 0, 4)
+            .await
+            .is_err());
     }
 }
