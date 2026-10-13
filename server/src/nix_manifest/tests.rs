@@ -39,6 +39,26 @@ WantMassQuery: 1
 }
 
 #[test]
+fn test_empty_value_does_not_absorb_next_line() {
+    // Adversarial: an empty value is the rest of its own line only.
+    // The following line's key and value must still parse as their
+    // own entry instead of being swallowed as the empty field's
+    // value.
+    let manifest = r#"
+StoreDir: 
+WantMassQuery: 1
+    "#;
+
+    let expected = HypotheticalManifest {
+        store_dir: PathBuf::new(),
+        want_mass_query: true,
+    };
+
+    let parsed = super::from_str::<HypotheticalManifest>(manifest).unwrap();
+    assert_eq!(parsed, expected);
+}
+
+#[test]
 fn test_unquoted_number() {
     let manifest = r#"
 StoreDir: 12345
