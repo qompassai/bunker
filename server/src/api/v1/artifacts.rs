@@ -58,17 +58,17 @@ use crate::{RequestState, State};
 /// Maximum length of an artifact name, in characters.
 ///
 /// Mirrors the `artifact.name` column width (`varchar(50)`).
-const MAX_NAME_LEN: usize = 50;
+pub(crate) const MAX_NAME_LEN: usize = 50;
 
 /// Maximum length of an artifact version, in characters.
 ///
 /// Mirrors the `artifact.version` column width (`varchar(64)`).
-const MAX_VERSION_LEN: usize = 64;
+pub(crate) const MAX_VERSION_LEN: usize = 64;
 
 /// Maximum length of an artifact filename, in characters.
 ///
 /// Mirrors the `artifact.filename` column width (`varchar(128)`).
-const MAX_FILENAME_LEN: usize = 128;
+pub(crate) const MAX_FILENAME_LEN: usize = 128;
 
 /// How long an upload row is kept before it is considered stale.
 ///
@@ -129,21 +129,21 @@ pub(crate) async fn upload_artifact(
 
 /// The parameters of one artifact upload: what the client asked
 /// for, what it declared about the body, and the server's limit.
-struct UploadParams<'a> {
+pub(crate) struct UploadParams<'a> {
     /// The upload metadata from the `X-Bunker-Artifact-Info`
     /// header.
-    request: &'a ArtifactUploadRequest,
+    pub(crate) request: &'a ArtifactUploadRequest,
 
     /// The SHA-256 digest the client declared for the body, if
     /// it declared one.
-    expected_sha256: Option<[u8; 32]>,
+    pub(crate) expected_sha256: Option<[u8; 32]>,
 
     /// The size the client declared for the body, if it declared
     /// one.
-    expected_size: Option<u64>,
+    pub(crate) expected_size: Option<u64>,
 
     /// The server's maximum artifact size for this upload.
-    max_size: u64,
+    pub(crate) max_size: u64,
 }
 
 /// The upload itself, split from the HTTP plumbing so tests can
@@ -159,7 +159,7 @@ struct UploadParams<'a> {
 /// 4. The artifact row and the `latest` pointer move in one
 ///    transaction; the object is then placed at its final key
 ///    and the upload row resolved.
-async fn upload_artifact_inner(
+pub(crate) async fn upload_artifact_inner(
     database: &DatabaseConnection,
     storage: &dyn StorageBackend,
     auth: &AuthState,
@@ -510,14 +510,30 @@ fn artifact_content_type(filename: &str) -> &'static str {
 /// and whitespace from every field. The filename additionally
 /// may not contain `..`.
 fn validate_upload_request(request: &ArtifactUploadRequest) -> ServerResult<()> {
-    validate_field("name", &request.name, MAX_NAME_LEN)?;
-    validate_field("version", &request.version, MAX_VERSION_LEN)?;
-    validate_field("filename", &request.filename, MAX_FILENAME_LEN)?;
+    validate_artifact_tokens(&request.name, &request.version, &request.filename)
+}
 
-    if request.filename.contains("..") || request.filename == "." {
+/// Validates the `(name, version, filename)` tokens that address
+/// an artifact.
+///
+/// This is the one validation discipline for the artifact
+/// namespace: the upload endpoint runs it before any write, and
+/// the download endpoint (`crate::api::artifacts`) runs the same
+/// function before any read, so a token that could not have been
+/// uploaded can never address a read either.
+pub(crate) fn validate_artifact_tokens(
+    name: &str,
+    version: &str,
+    filename: &str,
+) -> ServerResult<()> {
+    validate_field("name", name, MAX_NAME_LEN)?;
+    validate_field("version", version, MAX_VERSION_LEN)?;
+    validate_field("filename", filename, MAX_FILENAME_LEN)?;
+
+    if filename.contains("..") || filename == "." {
         return Err(ErrorKind::RequestError(anyhow!(
             "Invalid filename {:?}: must be a bare filename",
-            request.filename
+            filename
         ))
         .into());
     }
