@@ -1,0 +1,28 @@
+# Golden M0 fixture server configuration.
+#
+# regenerate.sh substitutes @RUNTIME@ (a fresh temporary directory)
+# and @TOKEN_SECRET@ (the in-tree config-test JWT key, a published
+# test-only key) before starting bunkerd. Chunking and compression
+# are pinned to the production template defaults so the corpus stays
+# stable even if those defaults change later.
+listen = "127.0.0.1:8931"
+allowed-hosts = []
+
+[database]
+url = "sqlite://@RUNTIME@/bunker.db?mode=rwc"
+
+[storage]
+type = "local"
+path = "@RUNTIME@/storage"
+
+[chunking]
+nar-size-threshold = 65536
+min-size = 16384
+avg-size = 65536
+max-size = 262144
+
+[compression]
+type = "zstd"
+
+[jwt.signing]
+token-ed25519-secret-base64 = "@TOKEN_SECRET@"

@@ -1,0 +1,7 @@
+StorePath: /nix/store/0251v6dlj190y3hlqrrv4mshr4h6f1sy-golden-a
+URL: nar/0251v6dlj190y3hlqrrv4mshr4h6f1sy.nar
+Compression: zstd
+NarHash: sha256:a6d89d655c122b27827b06833610fce91f17f595f45639b049e4404f8c432f04
+NarSize: 896
+References: 
+Sig: golden-m0:ezq3bJ45qeFoT+fLTB+BH7UqOUJ6vkPp0iBDbqJhquYHeSk43NMgpmQ2RJeLd1NdJ+mPerOMzLRI7REEPk6/DA==

@@ -1,0 +1,8 @@
+StorePath: /nix/store/hch7h8q23yrf21z7zbsc2rp07riac55b-golden-b
+URL: nar/hch7h8q23yrf21z7zbsc2rp07riac55b.nar
+Compression: zstd
+NarHash: sha256:7834f8e5eeeadf5679a0696f250e291400f85c47340e2f93f8fe936a0b62f8d5
+NarSize: 600536
+References: 0251v6dlj190y3hlqrrv4mshr4h6f1sy-golden-a
+Deriver: golden-b.drv
+Sig: golden-m0:Iu2WiUtkEHw+8YFDEs7MFwsOGzExcMUgm383fD0JzKMPtdMm8+UBrpYPeQN/uB6Ws0DRLRRAts9czGBQrOssCg==

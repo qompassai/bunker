@@ -1,0 +1,2 @@
+/nix/store/0251v6dlj190y3hlqrrv4mshr4h6f1sy-golden-a: num_chunks=1
+/nix/store/hch7h8q23yrf21z7zbsc2rp07riac55b-golden-b: num_chunks=10
