@@ -1,0 +1,1 @@
+{"name": "escaping is minimal: slash unescaped, non-ASCII raw, control chars escaped, DEL raw", "input": "\"a\\/b é \\u0001 \\u007f\"", "canonical": "\"a/b é \\u0001 \""}

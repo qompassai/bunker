@@ -1,0 +1,1 @@
+{"name": "lone surrogate rejects", "input": "\"\\ud800\"", "reject": true}

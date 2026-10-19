@@ -1,0 +1,17 @@
+[package]
+name = "signed-approval"
+version = "0.1.0"
+edition = "2024"
+description = "Signed Authority Approvals: canonical approval manifests, signer, and executor verification (pilot)"
+license = "Apache-2.0"
+
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"

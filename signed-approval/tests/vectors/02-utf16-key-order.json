@@ -1,0 +1,1 @@
+{"name": "keys sort by UTF-16 code units: astral key (D834..) precedes U+FFFF", "input": "{\"\\uffff\":1,\"𝄞\":2}", "canonical": "{\"𝄞\":2,\"￿\":1}"}

@@ -1,0 +1,1 @@
+{"name": "trailing content rejects", "input": "{\"a\":1} {\"b\":2}", "reject": true}

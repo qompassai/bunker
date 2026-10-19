@@ -1,0 +1,1 @@
+{"name": "float spelling canonicalizes inside objects", "input": "{\"x\":1.0}", "canonical": "{\"x\":1}"}

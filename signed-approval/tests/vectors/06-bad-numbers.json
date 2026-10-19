@@ -1,0 +1,1 @@
+{"name": "leading-zero numbers reject", "input": "[01]", "reject": true}
