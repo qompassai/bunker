@@ -12,7 +12,7 @@ use futures::stream::{self, StreamExt};
 #[cfg(feature = "nix")]
 use futures::stream::{TryStream, TryStreamExt};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT},
+    header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_RANGE, RANGE, USER_AGENT},
     redirect::Policy,
     Body, Client as HttpClient, Response, StatusCode, Url,
 };
@@ -73,6 +73,24 @@ pub struct DownloadedArtifact {
     /// read off the server's `X-Bunker-Artifact-Version`
     /// header; otherwise it equals the requested version.
     pub version: String,
+}
+
+/// What the artifact route reports about one artifact without
+/// serving its body.
+#[derive(Debug)]
+pub struct ArtifactInfo {
+    /// Lowercase hex SHA-256 of the artifact, from the server's
+    /// strong ETag.
+    pub sha256: String,
+
+    /// Size of the artifact in bytes, from the `Content-Range`
+    /// total.
+    pub size: u64,
+
+    /// The version the server resolved, when the request named
+    /// `latest` (its `X-Bunker-Artifact-Version` header);
+    /// `None` for a literal version.
+    pub resolved_version: Option<String>,
 }
 
 /// The grace period, in seconds, allowed for one artifact
@@ -480,6 +498,81 @@ impl ApiClient {
             version: served_version,
         })
     }
+
+    /// Reads an artifact's metadata through the download route
+    /// without transferring its body.
+    ///
+    /// The request asks for the one-byte range `bytes=0-0`: the
+    /// route answers a range in place for every cache (it never
+    /// redirects a ranged read to storage), and both of its range
+    /// answers carry the total size — `206` as
+    /// `bytes 0-0/<size>`, and `416` (an empty artifact) as
+    /// `bytes */<size>`. Authorization is the download's: the
+    /// `pull` permission on the cache.
+    pub async fn artifact_info(
+        &self,
+        cache: &CacheName,
+        name: &str,
+        version: &str,
+        filename: &str,
+    ) -> Result<ArtifactInfo> {
+        validate_artifact_address(name, version, filename)?;
+
+        let url = self.endpoint.join(&format!(
+            "{}/artifacts/{}/{}/{}",
+            cache, name, version, filename
+        ))?;
+
+        let res = self
+            .download_client
+            .get(url)
+            .header(USER_AGENT, HeaderValue::from_str(BUNKER_USER_AGENT)?)
+            .header(RANGE, HeaderValue::from_static("bytes=0-0"))
+            .send()
+            .await?;
+
+        let status = res.status();
+        if status != StatusCode::PARTIAL_CONTENT && status != StatusCode::RANGE_NOT_SATISFIABLE {
+            if status.is_success() || status.is_redirection() {
+                return Err(anyhow!(
+                    "Artifact route answered a ranged metadata request with HTTP {}; expected 206 or 416",
+                    status
+                ));
+            }
+            let api_error = ApiError::try_from_response(res).await?;
+            return Err(api_error.into());
+        }
+
+        let sha256 = parse_etag_digest(&res)?;
+        let size = parse_content_range_total(&res)?;
+        let resolved_version = res
+            .headers()
+            .get(VERSION_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+
+        Ok(ArtifactInfo {
+            sha256,
+            size,
+            resolved_version,
+        })
+    }
+}
+
+/// Extracts the total size from a range response's
+/// `Content-Range` (`bytes a-b/<total>` or `bytes */<total>`).
+fn parse_content_range_total(response: &Response) -> Result<u64> {
+    let value = response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| anyhow!("Artifact range response carries no Content-Range"))?;
+
+    value
+        .strip_prefix("bytes ")
+        .and_then(|rest| rest.rsplit_once('/'))
+        .and_then(|(_, total)| total.parse::<u64>().ok())
+        .ok_or_else(|| anyhow!("Artifact Content-Range {:?} has no numeric total", value))
 }
 
 /// Streams a response body to `path`, computing the SHA-256
@@ -533,7 +626,7 @@ fn parse_etag_digest(response: &Response) -> Result<String> {
 /// before a URL is built from it. URL parsing normalizes
 /// traversal segments away, so checking after construction
 /// would be checking nothing.
-fn validate_artifact_address(name: &str, version: &str, filename: &str) -> Result<()> {
+pub fn validate_artifact_address(name: &str, version: &str, filename: &str) -> Result<()> {
     fn check(field: &str, value: &str, max_len: usize) -> Result<()> {
         if value.is_empty()
             || value.len() > max_len

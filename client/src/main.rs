@@ -14,20 +14,17 @@
     deny(unused_imports, unused_mut, unused_variables,)
 )]
 
-mod api;
-mod cache;
 mod cli;
 mod command;
-mod config;
 #[cfg(feature = "nix")]
 mod nix_config;
 #[cfg(feature = "nix")]
 mod nix_netrc;
 #[cfg(feature = "nix")]
 mod push;
-mod version;
 
 use anyhow::Result;
+use bunker_client::{api, cache, config};
 
 #[tokio::main]
 async fn main() -> Result<()> {
