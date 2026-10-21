@@ -7,7 +7,7 @@ Post-quantum secure Nix binary cache server (fork of zhaofengli/attic).
 Active development: PQ hardening program in progress (2026-10-04).
 See ~/workspace/bunker/plan-2026-10-04.md for the phased plan.
 
-Decisions (2026-10-04, Matt):
+Decisions (2026-10-04, Owner):
 - Hybrid signatures (Ed25519 + ML-DSA-65) for NAR signing
 - Proxy is a workspace member (moved from .forge/proxy/)
 - NixOS deployment target; also local/dev cache and remote ops
